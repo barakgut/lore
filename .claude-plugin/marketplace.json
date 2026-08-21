@@ -1,0 +1,12 @@
+{
+  "name": "lore-marketplace",
+  "owner": { "name": "Barak Gutman" },
+  "description": "Home of the lore plugin — a persistent, human-readable markdown knowledge base for Claude Code, distilled from whatever you drop in its inbox.",
+  "plugins": [
+    {
+      "name": "lore",
+      "source": "./",
+      "description": "Lore (Long-term Organized Reference) — a markdown second brain for Claude Code: universal inbox, agent-maintained wiki, index-first retrieval."
+    }
+  ]
+}
