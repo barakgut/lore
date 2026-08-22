@@ -58,6 +58,8 @@ Never load the whole wiki into context. The index is the map.
 
 Every mutation (init, ingest, lint fix, answer promotion) ends with a commit here, message prefixed `init:`, `ingest:`, `lint:`, or `answer:`.
 
+If this lore was created with `--no-git` it is not a repository: do the work, skip the commit, and say so in the report. Never run `git init` on it.
+
 ## Operations
 
 `/lore:lore-ingest` — process new `raw/` files into the wiki. `/lore:lore-lint` — health check. `/lore:lore-link` — point a project at this lore.

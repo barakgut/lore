@@ -7,7 +7,20 @@ description: Use when answering any domain or knowledge question in a project li
 
 ## Finding the lore
 
-Read `~/.claude/lore.json` → `{"path": "<abs path>"}`. If the file is missing, tell the user to run `/lore:lore-init` and stop.
+Resolve `$LORE` with these rungs, first match wins. Never guess, never scan the disk, never fall back to `~/lore`. Whatever path a rung yields, expand `~` and resolve a relative path against cwd **before** testing it, so `$LORE` is always an absolute, symlink-resolved path.
+
+1. **A path in the user's message** — e.g. `/lore:lore-ingest ~/wikis/hardware`.
+2. **cwd is a lore** — `[ -f ./index.md ] && [ -d ./raw ] && [ -d ./wiki ]`. Use cwd.
+3. **The project's link block** — the `<!-- lore:start -->` block in the project's `CLAUDE.md` names a path. It is usually already in context; otherwise read `./CLAUDE.md`.
+4. **Nothing matched** — STOP. Tell the user, verbatim:
+
+   > No lore found. `cd` into a lore, pass its path (`/lore:lore-ingest <path>`), or run `/lore:lore-link <path>` in this project.
+
+Rung 2 needs all three of `index.md`, `raw/`, and `wiki/` — it fires on whatever directory the user happens to be in, and a lone `index.md` is a common filename. Rungs 1 and 3 need only `index.md`, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
+
+If a rung matches but the path has no `index.md`, STOP and name the bad path — **never fall through** to the next rung. A stale `lore:start` block must be reported (suggest re-running `/lore:lore-link <path>`), not silently bypassed.
+
+Rungs 2 and 3 cannot both match: a lore's own `CLAUDE.md` is its schema and never carries a `lore:start` marker.
 
 Then read `<lore>/CLAUDE.md` — the lore's schema. The rules below are the defaults every new lore is seeded with; where the lore's CLAUDE.md differs (the user evolves it over time), the lore's CLAUDE.md wins.
 
@@ -80,3 +93,15 @@ A `raw/` file counts as already-processed iff `log.md` contains an entry heading
 ## Git
 
 Every mutation of the lore (init, ingest, lint fix, answer promotion) ends with `git add -A && git commit` inside the lore repo, message prefixed `init:`, `ingest:`, `lint:`, or `answer:`.
+
+A lore created with `/lore:lore-init --no-git` is not a repository. Before committing, test that the lore is a repository **root** — its own repository, not merely a folder somewhere inside one:
+
+```bash
+[ "$(git -C "$LORE" rev-parse --show-toplevel 2>/dev/null)" = "$LORE" ]
+```
+
+The comparison only holds when `$LORE` is an absolute, symlink-resolved path — the form the ladder above produces, and the form `rev-parse --show-toplevel` prints; a relative or `~`-prefixed `$LORE` would mismatch a perfectly good repo.
+
+The test is deliberately this narrow. `rev-parse` searches *upward*, so a lore nested inside another git repository would answer "yes" to any wider test — and `git add -A` then stages from that outer repository's root regardless of `-C`, sweeping the user's unrelated project files into a lore commit. A nested lore is therefore correctly treated as not-a-repo, which is exactly the case `--no-git` exists for.
+
+If the test fails: do the work, **skip the commit**, and state in the report that changes were written without a commit. Never error, and never offer to run `git init` — the user opted out deliberately.

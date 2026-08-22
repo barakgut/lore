@@ -1,14 +1,14 @@
 ---
 name: lore-init
-description: Use when the user runs /lore:lore-init [path] — create (or re-point to) the lore folder, scaffold its layout with its CLAUDE.md schema, git-init it, and record its location in ~/.claude/lore.json.
+description: Use when the user runs /lore:lore-init [path] [--no-git] — create the lore folder, scaffold its layout with its CLAUDE.md schema, and git-init it unless --no-git. Writes nothing outside the lore folder.
 ---
 
-# /lore:lore-init [path]
+# /lore:lore-init [path] [--no-git]
 
 Follow the `lore` skill for all conventions. The full-rules schema every new lore is seeded with lives at `${CLAUDE_PLUGIN_ROOT}/skills/lore-init/templates/CLAUDE.md` — i.e. `templates/CLAUDE.md` next to this file, if you need to locate it another way.
 
-1. Resolve `LORE` = the argument if given, else `$HOME/lore`. Expand to an absolute path.
-2. **Existing lore?** If `$LORE/index.md` exists: do NOT touch the folder. Only rewrite the config (step 5), report "re-pointed config to existing lore", and stop after step 5.
+1. Resolve `LORE` = the path argument if given, else `$HOME/lore`. Expand to an absolute path. Note whether the user passed `--no-git` — it decides step 4's last block.
+2. **Already a lore?** If `$LORE/index.md` exists: touch nothing. Report "already a lore, nothing to do" with the path, remind the user that a lore needs no config — `cd` into it, or run `/lore:lore-link <path>` in a project — and stop.
 3. **Non-empty, non-lore folder?** If `$LORE` exists, is non-empty, and has no `index.md`: refuse and ask the user for a different path. Never scaffold over foreign files.
 4. Scaffold:
 
@@ -25,18 +25,18 @@ cat > "$LORE/log.md" <<EOF
 ## [$(date +%F)] init | lore created
 EOF
 cp "${CLAUDE_PLUGIN_ROOT}/skills/lore-init/templates/CLAUDE.md" "$LORE/CLAUDE.md"
-cd "$LORE" && git init -q && git add -A && git commit -q -m "init: lore scaffold"
 ```
 
 If that copy fails — `CLAUDE_PLUGIN_ROOT` unset or the template not found there — locate `templates/CLAUDE.md` next to this SKILL.md and copy it. If you still cannot find it, STOP and tell the user: a lore without its `CLAUDE.md` has no schema layer, and step 2 will refuse to heal it later.
 
-(If git identity is unset in this environment, set a repo-local one first with `git config user.email` / `git config user.name`, asking the user for values if unknown.)
-
-5. Record location:
+Then, **only if the user did not pass `--no-git`**, initialise the repository. Run this block on a default init; on `--no-git` do not run it at all — not even "just in case":
 
 ```bash
-mkdir -p ~/.claude
-python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$LORE" > ~/.claude/lore.json
+cd "$LORE" && git init -q && git add -A && git commit -q -m "init: lore scaffold"
 ```
 
-6. Report: lore path, what was created (or "re-pointed"), and next steps (drop files into `raw/`, run `/lore:lore-ingest`, run `/lore:lore-link` inside projects).
+(If git identity is unset in this environment, set a repo-local one first with `git config user.email` / `git config user.name`, asking the user for values if unknown.)
+
+With `--no-git` the lore has no history and no undo. Say so once in the report: ingest and lint will write pages without committing.
+
+5. Report: the lore path, what was created, whether git was initialised, and next steps — drop files into `raw/`, then either `cd` into the lore and run `/lore:lore-ingest`, or run `/lore:lore-link <path>` inside a project. Nothing was written outside the lore folder.

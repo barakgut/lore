@@ -5,7 +5,7 @@ description: Use when the user runs /lore:lore-ingest — find files in the lore
 
 # /lore:lore-ingest
 
-Follow the `lore` skill for all conventions. Lore path comes from `~/.claude/lore.json`; read `$LORE/CLAUDE.md` first — where it differs from these defaults, it wins.
+Follow the `lore` skill for all conventions — including its **Finding the lore** ladder, which resolves `$LORE` (a path in the user's message, else cwd if it is a lore, else the project's `lore:start` block, else hard fail). Then read `$LORE/CLAUDE.md` — where it differs from these defaults, it wins.
 
 Default flow is interactive: after each file, surface the key takeaways in the report so the user can steer emphasis before the next one. If the user asks for a batch run, process everything straight through and report once at the end.
 
@@ -56,7 +56,13 @@ Every page gets full frontmatter (`type`, `title`, `source`, `captured`, `freshn
 ## 4. Commit and report
 
 ```bash
-cd "$LORE" && git add -A && git commit -m "ingest: <filenames>"
+if [ "$(git -C "$LORE" rev-parse --show-toplevel 2>/dev/null)" = "$LORE" ]; then
+  git -C "$LORE" add -A && git -C "$LORE" commit -m "ingest: <filenames>"
+else
+  echo "NOT_A_GIT_REPO"
+fi
 ```
 
 Report to the user: files processed, pages created/updated, skips (with reasons), contradictions flagged.
+
+If the lore is not a git repository (`--no-git`), say plainly that the pages were written without a commit — there is no undo for this ingest.

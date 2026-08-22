@@ -5,7 +5,7 @@ description: Use when the user runs /lore:lore-lint — health-check the lore fo
 
 # /lore:lore-lint
 
-Follow the `lore` skill for all conventions. Lore path from `~/.claude/lore.json`; read `$LORE/CLAUDE.md` first — where it differs from these defaults, it wins.
+Follow the `lore` skill for all conventions — including its **Finding the lore** ladder, which resolves `$LORE` (a path in the user's message, else cwd if it is a lore, else the project's `lore:start` block, else hard fail). Then read `$LORE/CLAUDE.md` — where it differs from these defaults, it wins.
 
 ## Checks
 
@@ -35,5 +35,15 @@ Follow the `lore` skill for all conventions. Lore path from `~/.claude/lore.json
 
 - Apply all FIXes, then append to `log.md`: `## [YYYY-MM-DD] lint | <n> fixed, <m> reported`.
   Count each item once: a newly recorded contradiction marker is a FIX, so it belongs in `<n>` and not in `<m>`, even though the user-facing report lists every contradiction.
-- Then commit: `cd "$LORE" && git add -A && git commit -m "lint: <summary>"`. Always commit — the log entry is itself a change, so a lint run is never a clean tree.
+- Then commit, if the lore is a git repository:
+
+  ```bash
+  if [ "$(git -C "$LORE" rev-parse --show-toplevel 2>/dev/null)" = "$LORE" ]; then
+    git -C "$LORE" add -A && git -C "$LORE" commit -m "lint: <summary>"
+  else
+    echo "NOT_A_GIT_REPO"
+  fi
+  ```
+
+  When it is a repo, always commit — the log entry is itself a change, so a lint run is never a clean tree. When it is not, report that fixes were written without a commit.
 - Report to the user: fixed items, then reported items grouped by check, each with file paths.

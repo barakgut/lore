@@ -7,8 +7,9 @@ into an interlinked markdown wiki with a catalog index — file types it cannot
 read are skipped with a note in the log, never silently dropped. Link any
 project to the lore with one command.
 
-Zero dependencies: markdown + git + ripgrep, plus python3 for reading
-spreadsheets. No databases, no APIs, no models.
+Zero dependencies: markdown + ripgrep, plus git for the undo history (optional,
+via `--no-git`) and python3 for reading spreadsheets. No databases, no APIs, no
+models.
 
 ## Install
 
@@ -74,17 +75,28 @@ below should be offered.
 
 ## Use
 
-    /lore:lore-init [path]   # once — creates the lore (default ~/lore), git-inits it
+    /lore:lore-init [path] [--no-git]   # once — creates the lore (default ~/lore); git-inits it unless --no-git
     # drop files into <lore>/raw/   (PDF, images, xlsx/csv, md, txt, saved HTML)
-    /lore:lore-ingest        # distill new raw files into the wiki
-    /lore:lore-link          # once per project — point it at the lore
-    /lore:lore-lint          # periodic health check (after ~5 ingests or monthly)
+    cd <lore> && /lore:lore-ingest      # distill new raw files into the wiki
+    /lore:lore-link <path>              # once per project — point it at the lore
+    /lore:lore-lint                     # periodic health check (after ~5 ingests or monthly)
 
 Then just ask questions in linked projects; answers cite their sources.
 
-The lore's location is stored in `~/.claude/lore.json`. If that file is lost or
-you move the folder, `/lore:lore-init <path>` on the existing lore just
-re-points the config — it never touches your notes.
+A lore is self-describing — nothing about it is stored anywhere else. Commands
+find it in this order: a path you name (`/lore:lore-ingest ~/wikis/hardware`),
+the folder you are standing in, or the `lore:start` block that
+`/lore:lore-link` wrote into a project's `CLAUDE.md`. If none of those apply the
+command stops and says so rather than guessing at your notes. Moved a lore?
+Re-run `/lore:lore-link <new-path>` in the projects that point at it.
+
+Because nothing is global, you can keep as many separate lores as you like — one
+per domain, per client, per machine.
+
+`/lore:lore-init --no-git` skips `git init`, for a lore that lives inside a
+folder already synced by Obsidian Sync, iCloud, or Dropbox, or nested in another
+repo. Ingest and lint then write pages without committing and tell you so — you
+lose the undo, so prefer the default.
 
 ## Bootstrapping existing notes
 
@@ -105,10 +117,11 @@ to the lore from then on.
 
 Notes for humans: sections headed `## My Take` are never touched by the agent;
 contradictions between sources are flagged, never silently resolved; every
-change is a git commit you can review or revert.
+change is a git commit you can review or revert, unless the lore was created
+with `--no-git`.
 
-The lore is its own git repository — back it up like any other repo, or add a
-remote and push it to carry your knowledge base between machines.
+By default the lore is its own git repository — back it up like any other repo,
+or add a remote and push it to carry your knowledge base between machines.
 
 ## License
 
