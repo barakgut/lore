@@ -83,6 +83,13 @@ below should be offered.
 
 Then just ask questions in linked projects; answers cite their sources.
 
+Replaced a file in `raw/` with a newer version? The next `/lore:lore-ingest`
+notices — each ingest records the file's content hash in the log — and updates
+only the pages that cite that file, flagging contradictions where another
+source still disagrees. Files ingested before v0.3 carry no recorded hash, so
+change detection can't see a replacement for them yet — name such a file
+explicitly once (`/lore:lore-ingest spec.pdf`) to start tracking it.
+
 A lore is self-describing — nothing about it is stored anywhere else. Commands
 find it in this order: a path you name (`/lore:lore-ingest ~/wikis/hardware`),
 the folder you are standing in, or the `lore:start` block that
@@ -106,6 +113,17 @@ raw files are distilled as usual, and wiki pages without frontmatter get
 frontmatter, an index entry, and a log entry. One-time copy — the pages belong
 to the lore from then on.
 
+## Upgrading a pre-0.3 lore
+
+Nothing is migrated automatically. Pages written under the old schema
+(`captured`, `freshness`, `trust`, singular `source:`) are reported by
+`/lore:lore-lint` as schema violations every run, by design — that's expected,
+not a bug, and the only way to clear it is to re-ingest the page's raw source
+by name. Likewise, files already ingested before v0.3 carry no recorded content
+hash, so `/lore:lore-ingest` can't tell whether they've since been replaced;
+name each one explicitly once (`/lore:lore-ingest <file>`) to start tracking
+it.
+
 ## The folder
 
     <lore>/
@@ -116,9 +134,11 @@ to the lore from then on.
       wiki/           # the distilled lore — plain markdown, yours to read and edit
 
 Notes for humans: sections headed `## My Take` are never touched by the agent;
-contradictions between sources are flagged, never silently resolved; every
-change is a git commit you can review or revert, unless the lore was created
-with `--no-git`.
+contradictions between sources are flagged, never silently resolved; a plugin
+hook blocks the agent from editing anything under `raw/`; retire a wiki page by
+telling Claude "discard page X" (or "delete page X permanently" for true junk —
+git history is the undo); every change is a git commit you can review or
+revert, unless the lore was created with `--no-git`.
 
 By default the lore is its own git repository — back it up like any other repo,
 or add a remote and push it to carry your knowledge base between machines.
