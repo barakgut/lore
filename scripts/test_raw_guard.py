@@ -77,6 +77,7 @@ class TestAllow(unittest.TestCase):
         root = Path(tempfile.mkdtemp())      # raw/ with no lore markers around it
         (root / "raw").mkdir()
         proc = run_hook(hook_input("Write", {"file_path": str(root / "raw" / "notes.md")}))
+        self.assertEqual(proc.returncode, 0)
         self.assertIsNone(decision(proc))
 
     def test_missing_file_path_has_no_opinion(self):
@@ -88,6 +89,17 @@ class TestAllow(unittest.TestCase):
         proc = run_hook("this is not json")
         self.assertEqual(proc.returncode, 0)
         self.assertIsNone(decision(proc))
+
+    def test_structurally_odd_stdin_has_no_opinion(self):
+        # Valid JSON, but the top-level payload is not an object.
+        proc = run_hook(json.dumps([1, 2, 3]))
+        self.assertEqual(proc.returncode, 0)
+        self.assertIsNone(decision(proc))
+
+        # tool_input is present but not a dict.
+        proc2 = run_hook(json.dumps({"tool_name": "Write", "tool_input": "not-a-dict", "cwd": "/"}))
+        self.assertEqual(proc2.returncode, 0)
+        self.assertIsNone(decision(proc2))
 
 
 if __name__ == "__main__":

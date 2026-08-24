@@ -33,29 +33,33 @@ def lore_root_for(path):
 def main():
     try:
         data = json.load(sys.stdin)
+        if not isinstance(data, dict):
+            return
+        tool_input = data.get("tool_input")
+        if not isinstance(tool_input, dict):
+            return
+        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if not target:
+            return
+        target = os.path.expanduser(target)
+        if not os.path.isabs(target):
+            target = os.path.join(data.get("cwd") or os.getcwd(), target)
+        target = os.path.realpath(target)
+        root = lore_root_for(target)
+        if root:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"{target} is inside {root}/raw/ — raw/ is immutable; "
+                        "originals are ground truth. Write distilled content to "
+                        "wiki/ instead."
+                    ),
+                }
+            }))
     except Exception:
         return
-    tool_input = data.get("tool_input") or {}
-    target = tool_input.get("file_path") or tool_input.get("notebook_path")
-    if not target:
-        return
-    target = os.path.expanduser(target)
-    if not os.path.isabs(target):
-        target = os.path.join(data.get("cwd") or os.getcwd(), target)
-    target = os.path.realpath(target)
-    root = lore_root_for(target)
-    if root:
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"{target} is inside {root}/raw/ — raw/ is immutable; "
-                    "originals are ground truth. Write distilled content to "
-                    "wiki/ instead."
-                ),
-            }
-        }))
 
 
 if __name__ == "__main__":
