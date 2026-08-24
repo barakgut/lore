@@ -2,8 +2,10 @@
 // no raw-HTML string injection, ever.
 // Page bodies are untrusted content (agent- or human-authored, never sanitized
 // upstream): every node here is built with el()/textContent, and any href that
-// comes straight from the markdown text is passed through safeHref() first so
-// a `javascript:`/`vbscript:` link can never execute on click.
+// comes straight from the markdown text is passed through safeHref() first —
+// an allowlist of schemes a page can legitimately need, so a scheme this
+// renderer has never heard of (data:, blob:, javascript:, vbscript:, ...)
+// can never reach the DOM as a live link.
 const INLINE_SPLIT_RE = /(`[^`]+`|\[\[[^\]]+\]\]|\[\^[^\]]+\]|\[[^\]]*\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*)/;
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 const LIST_RE = /^(\s*)(?:([-*+])|(\d+)\.)\s+(.*)$/;
@@ -11,15 +13,22 @@ const FENCE_RE = /^```(.*)$/;
 const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const CONTRADICTION_LINE_RE = /^>\s*⚠\s*CONTRADICTION/;
 const MY_TAKE_HEADING_RE = /^##+\s*My Take\s*$/i;
-const UNSAFE_HREF_SCHEME_RE = /^(?:javascript|vbscript):/i;
+const HREF_SCHEME_RE = /^([a-z][a-z0-9+.-]*):/;
+const ALLOWED_HREF_SCHEMES = new Set(["http", "https", "mailto"]);
 
-// Blocks script-executing URI schemes (javascript:, vbscript:) in links that
-// come straight from page text — including whitespace/control-char tricks
-// like "java\tscript:" — by stripping those characters before the scheme
-// check. Returns null (a non-link) for anything unsafe.
+// Allowlist, not a blocklist: a link's href comes straight from an untrusted
+// page body, so this names what the page legitimately needs (relative/
+// scheme-less hrefs into wiki/ and raw/, fragment hrefs like "#page/..." and
+// footnote anchors, plus http:/https:/mailto: links) and rejects everything
+// else — including data:/blob:/javascript:/vbscript: and any scheme not yet
+// invented. Whitespace and control characters are stripped and the scheme is
+// lowercased before the check, so "java\tscript:" and a leading "\x00" still
+// fail closed. Returns null (a non-link) for anything not on the allowlist.
 function safeHref(href) {
-  const stripped = String(href).replace(/[\s\u0000-\u001f]+/g, "");
-  return UNSAFE_HREF_SCHEME_RE.test(stripped) ? null : href;
+  const normalized = String(href).replace(/[\s\u0000-\u001f]+/g, "").toLowerCase();
+  const match = normalized.match(HREF_SCHEME_RE);
+  if (!match) return href;                    // no scheme: relative or fragment href
+  return ALLOWED_HREF_SCHEMES.has(match[1]) ? href : null;
 }
 
 function wikiLinkNode(raw, page) {

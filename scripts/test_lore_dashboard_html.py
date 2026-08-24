@@ -127,6 +127,43 @@ class TestBuildHtml(unittest.TestCase):
         self.assertIn(expected_title, page)
 
 
+# safeHref(href) -> href | null. Pairs of (input, expected output). None means
+# "blocked" (the link must render with no href at all); anything else means
+# the href must survive untouched. safeHref is a pure string function, so
+# these are executed for real in node rather than grepped out of the source —
+# a case-sensitive guard, or one that skips control-char stripping, or one
+# that forgets a dangerous scheme, changes these results.
+SAFE_HREF_CASES = [
+    # blocked: script-executing / data-smuggling schemes, including the
+    # normalisation-defeating tricks the guard claims to handle
+    ("javascript:alert(1)", None),
+    ("JaVaScRiPt:alert(1)", None),
+    ("java\tscript:alert(1)", None),
+    ("\njavascript:alert(1)", None),
+    (" javascript:alert(1)", None),
+    ("\x00javascript:alert(1)", None),
+    ("data:text/html,<script>alert(1)</script>", None),
+    ("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", None),
+    ("blob:http://example.com/uuid", None),
+    # allowed: what a real lore page actually links to
+    ("../wiki/Some_Page.md", "../wiki/Some_Page.md"),
+    ("raw/spec.pdf", "raw/spec.pdf"),
+    ("#page/Some_Page", "#page/Some_Page"),
+    ("https://example.com", "https://example.com"),
+    ("mailto:someone@example.com", "mailto:someone@example.com"),
+]
+
+# Loads md.js in node (safeHref has no DOM dependency — it never touches
+# document/el/pageById) and calls the real function against SAFE_HREF_CASES.
+SAFE_HREF_RUNNER_JS = """
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[2], "utf8");
+(0, eval)(src);
+const inputs = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+process.stdout.write(JSON.stringify(inputs.map(safeHref)));
+"""
+
+
 @unittest.skipUnless(shutil.which("node"), "node not installed — JS syntax check skipped")
 class TestJsSyntax(unittest.TestCase):
     def test_every_js_asset_parses(self):
@@ -134,6 +171,22 @@ class TestJsSyntax(unittest.TestCase):
             result = subprocess.run(["node", "--check", str(ASSETS_DIR / name)],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
+
+    def test_safe_href_blocks_dangerous_schemes_and_allows_real_links(self):
+        inputs = [href for href, _ in SAFE_HREF_CASES]
+        expected = [want for _, want in SAFE_HREF_CASES]
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_safe_href.js"
+            cases = Path(tmp) / "cases.json"
+            runner.write_text(SAFE_HREF_RUNNER_JS, encoding="utf-8")
+            cases.write_text(json.dumps(inputs), encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "md.js"), str(cases)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(result.stdout)
+        for href, want, got in zip(inputs, expected, actual):
+            self.assertEqual(got, want, f"safeHref({href!r}) -> {got!r}, expected {want!r}")
 
 
 class TestPageViewAssets(unittest.TestCase):
