@@ -66,7 +66,11 @@ Before creating ANY page: `rg -i` the candidate title in `$LORE/index.md` and ov
 - **Image (png/jpg/gif/webp/svg)** — Read it. Write/extend a page with a structured caption: image kind (schematic / scope shot / photo / diagram), visible labels, designators, settings, and what it shows. The caption is for retrieval only — note in the page: "re-read the image for analysis; do not trust this caption for connectivity."
 - **Spreadsheet (xlsx/xls/csv/tsv)** — Write a `type: card` page: sheet names, column names, row count, ~5 sample rows, apparent purpose. Get these via python3 (csv module; openpyxl or duckdb for xlsx if available — if not available for xlsx, record what could be read and note the limitation on the card). Never paste large tables.
 - **Markdown / txt / html** — Read directly; write/extend `source`/`concept` pages. For html, ignore boilerplate; distill content.
-- **Anything else** — do not guess. Append a `skip` entry to `log.md` with the reason and list it in the final report.
+- **Anything else** — do not guess. Append a `skip` entry to `log.md` with the
+  reason and the file's `sha256:<first 12 hex>` on the detail line (same
+  `sha256sum … | cut -c1-12` derivation as the `ingest` entry, §3) — so a file
+  re-exported under the same name is detected as CHANGED on a later run — and
+  list it in the final report.
 
 Every page gets full frontmatter per the `lore` skill's page schema: `type`,
 `title`, `description` (one line — it becomes the page's index hook), `tags`,
@@ -86,11 +90,16 @@ Never rewrite affected pages from scratch — apply the delta:
 1. **Affected pages:** `rg -l -F 'raw/<file>' "$LORE/wiki/"` —
    `sources[].resource` entries (and inline citations) are the reverse index
    from a raw file to its pages.
-2. **The delta:** raw/ is committed on every ingest, so
-   `git -C "$LORE" diff -- "raw/<file>"` shows exactly what changed. If the
-   lore is `--no-git`, or the diff is empty (the new version was committed by
-   hand): fall back to a full re-read of the file and a semantic comparison
-   against the affected pages.
+2. **The delta:** raw/ is committed on every ingest, so diff against the
+   previous committed version rather than the worktree — a `lint:` commit may
+   have landed between the file swap and this ingest, making a worktree diff
+   empty. Find the previous commit with
+   `git -C "$LORE" log --oneline -- "raw/<file>"`, then
+   `git -C "$LORE" diff <prev-commit> -- "raw/<file>"` shows exactly what
+   changed. If the lore is `--no-git`, the diff is empty, or git reports the
+   file as binary (`Binary files … differ` — the common case for PDF, image,
+   and xlsx raw types): fall back to a full re-read of the file and a semantic
+   comparison against the affected pages.
 3. **Apply only the delta, claim by claim:**
    - A changed claim backed only by this source → **supersession**: rewrite the
      claim in place; no contradiction marker.

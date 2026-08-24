@@ -6,6 +6,11 @@ and CLAUDE.md. Any other raw/ directory is none of our business. On a match,
 print a PreToolUse deny decision; otherwise print nothing (no opinion), so the
 normal permission flow continues. Never exit non-zero: a guard that crashes
 must not block unrelated edits.
+
+Not a hard security boundary: realpath() resolves symlinks before the raw/
+basename check runs, so a symlinked raw/ directory escapes detection; this is
+defense-in-depth over the skills' own raw/-is-immutable instructions, and Bash
+is unhooked by design regardless.
 """
 import json
 import os

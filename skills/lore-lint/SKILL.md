@@ -31,8 +31,9 @@ Follow the `lore` skill for all conventions — including its **Finding the lore
    not under `## Deprecated`. FIX: move the line there.
 7. **Frontmatter validity** — against the `lore` skill's page schema:
    mandatory `type` (one of the allowed five), `title`, `description`, `tags`,
-   `sources` (each entry with a `resource`; `id` on every entry when the body
-   contains `[^` footnotes), and `generated` with both `by` and `at`. `status`,
+   and `generated` with both `by` and `at`. `sources` is validated only when
+   present (each entry needs a `resource`; `id` on every entry when the body
+   contains `[^` footnotes) — its absence is not a violation. `status`,
    if present, must be `draft`, `stable`, or `deprecated`. FIX missing/typo'd
    fields when the correct value is obvious from content; else REPORT. A page
    carrying unsupported old-schema fields (`source:`, `captured`, `freshness`,

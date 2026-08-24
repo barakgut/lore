@@ -61,6 +61,10 @@ status: draft | stable | deprecated    # optional; absent means stable
 - `concept` — a topic distilled across sources. `source` — summary of one raw file.
   `answer` — a promoted Q&A result. `decision` — a recorded choice and why.
   `card` — spreadsheet metadata card.
+- `sources` may be empty or absent on hand-written pages, on `type: decision`
+  pages with no raw origin, and on `answer` pages synthesized purely from
+  other wiki pages; those cite `wiki/<page>` inline and carry
+  `generated.by: human:<git user.name>` when a person wrote them.
 - `generated` records who wrote the content: `lore/<model-id>` when the agent
   wrote it, `human:<git user.name>` when the user did. Never an email address.
 - **Per-claim footnotes:** a page with one `sources` entry uses none — claims are
@@ -87,7 +91,7 @@ Never load the whole wiki into context. The index is the map.
 - Cite every claim: `raw/<file>#p<n>`, sheet/cell, or `wiki/<page>`. On
   multi-source pages the page's `[^id]` footnotes carry the attribution — reuse
   them.
-- **Answer promotion:** if the answer took real synthesis (multiple pages/sources), file it as a `type: answer` page, add an index line, append a `log.md` entry, and commit — so it is never re-derived.
+- **Answer promotion:** if the answer took real synthesis (multiple pages/sources), file it as a `type: answer` page, add an index line, append a `log.md` entry, and commit — so it is never re-derived. Where the raw origins of the pages it was derived from are known, list them in the answer's `sources[]` too, so a later raw change reaches the answer through the reverse index.
 - **Contradictions:** never silently resolve. Record inline:
   `> ⚠ CONTRADICTION: <claim A> [[Source_A]]; <claim B> [[Source_B]]`
 - **`## My Take` sections are human-owned.** Never rewrite, reorder, or delete them.
@@ -129,7 +133,7 @@ An `ingest` entry's detail line records the raw file's content hash as
 for a filename is the last matching heading; ingest compares its recorded hash
 against the current file to tell PROCESSED from CHANGED.
 
-A `raw/` file counts as already-processed iff `log.md` contains an entry heading whose filename field is exactly that filename: `^## \[YYYY-MM-DD\] (ingest|skip) \| <filename>$`. Match the whole field, anchored at both ends — never a substring: `spec.pdf` occurs inside the heading for `v2_spec.pdf`, so a substring test (`rg -F "spec.pdf"`) would classify a newly dropped `spec.pdf` as already processed and silently never ingest it.
+A `raw/` file **has a ledger entry** iff `log.md` contains an entry heading whose filename field is exactly that filename: `^## \[YYYY-MM-DD\] (ingest|skip) \| <filename>$`. Match the whole field, anchored at both ends — never a substring: `spec.pdf` occurs inside the heading for `v2_spec.pdf`, so a substring test (`rg -F "spec.pdf"`) would classify a newly dropped `spec.pdf` as already processed and silently never ingest it.
 
 ## Git
 
