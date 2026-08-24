@@ -264,6 +264,15 @@ class TestScanRaw(unittest.TestCase):
         self.assertEqual(record["state"], "SKIPPED")
         self.assertEqual(record["skip_reason"], "unsupported binary format")
 
+    def test_latest_by_append_position_wins_over_calendar_date(self):
+        lore = self._lore_with("spec.pdf", "data", "# Lore Log\n")
+        digest = sha12(lore / "raw" / "spec.pdf")
+        (lore / "log.md").write_text(
+            "## [2026-01-01] skip | spec.pdf\nunsupported binary format\n"
+            f"## [2025-06-01] ingest | spec.pdf\nsha256:{digest}\n")
+        record = scan_raw(lore, parse_log(lore), load_pages(lore))[0]
+        self.assertEqual(record["state"], "PROCESSED")
+
     def test_substring_filenames_never_match_another_files_entry(self):
         lore = self._lore_with("spec.pdf", "data", "# Lore Log\n")
         digest = sha12(lore / "raw" / "spec.pdf")

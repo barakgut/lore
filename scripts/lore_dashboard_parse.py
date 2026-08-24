@@ -302,7 +302,8 @@ def scan_raw(lore, log, pages):
     """Every file under raw/ with its ledger state and derived pages."""
     lore = Path(lore)
     latest = {}                                     # basename -> newest ingest/skip entry
-    for entry in log["entries"]:                    # already newest-first
+    by_line = sorted(log["entries"], key=lambda e: e["line"], reverse=True)
+    for entry in by_line:                           # append position, not calendar date
         if entry["verb"] in ("ingest", "skip"):
             latest.setdefault(entry["subject"], entry)
     derived = {}
