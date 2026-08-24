@@ -136,5 +136,44 @@ class TestJsSyntax(unittest.TestCase):
             self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
 
 
+class TestPageViewAssets(unittest.TestCase):
+    def test_markdown_and_view_assets_are_in_the_manifest_in_order(self):
+        self.assertEqual(JS_ASSETS.index("core.js"), 0)
+        self.assertLess(JS_ASSETS.index("md.js"), JS_ASSETS.index("views.js"))
+        self.assertEqual(JS_ASSETS[-1], "app.js")
+
+    def test_page_view_styles_ship_in_the_stylesheet(self):
+        css = (ASSETS_DIR / "app.css").read_text(encoding="utf-8")
+        for selector in [".callout", ".my-take", ".fm-card", ".dead", "sup.fn"]:
+            self.assertIn(selector, css)
+
+    def test_renderer_never_emits_document_write_or_inner_html_of_page_text(self):
+        source = (ASSETS_DIR / "md.js").read_text(encoding="utf-8")
+        self.assertNotIn("innerHTML", source)      # DOM building only — page text is untrusted
+        self.assertNotIn("document.write", source)
+
+    def test_neither_asset_uses_innerhtml_outerhtml_document_write_or_eval(self):
+        # Global constraint (not just md.js): page bodies are untrusted
+        # content, and every node in the page view must be built via
+        # el()/textContent — never through string-based HTML injection
+        # or eval, in either file that renders the page view.
+        for name in ("md.js", "views.js"):
+            source = (ASSETS_DIR / name).read_text(encoding="utf-8")
+            for hazard in ("innerHTML", "outerHTML", "document.write", "eval("):
+                self.assertNotIn(hazard, source, f"{name} contains {hazard}")
+
+    def test_markdown_links_sanitize_javascript_scheme_hrefs(self):
+        # The brief's reference renderer wired a markdown `[text](href)`
+        # link's href straight into the DOM (`href: href`), so a page
+        # body containing `[x](javascript:alert(1))` produced a live,
+        # clickable javascript: URI — exactly the raw-HTML/script
+        # injection this renderer exists to prevent (a page body is
+        # untrusted content). A sanitizer must sit between the parsed
+        # href and the DOM and must actually name the scheme it blocks.
+        source = (ASSETS_DIR / "md.js").read_text(encoding="utf-8")
+        self.assertNotRegex(source, r'href:\s*href\s*,')
+        self.assertRegex(source, r'javascript', re.IGNORECASE)
+
+
 if __name__ == "__main__":
     unittest.main()

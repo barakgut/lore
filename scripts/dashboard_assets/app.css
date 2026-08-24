@@ -59,3 +59,28 @@ tbody tr:hover { background: var(--surface-2); }
   body { background: #fff; color: #000; }
   a { color: #000; }
 }
+
+.page-view { max-width: 760px; }
+.prevnext { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 12px; }
+.fm-card { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 8px;
+           padding: 10px 14px; margin: 12px 0 20px; }
+.fm-row { display: flex; gap: 12px; padding: 3px 0; align-items: baseline; }
+.fm-row .k { color: var(--muted); width: 84px; flex: none; font-size: 12px; }
+.md h3, .md h4 { margin: 20px 0 8px; }
+.md p { margin: 10px 0; }
+.md ul, .md ol { margin: 10px 0 10px 22px; }
+.md pre { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 6px;
+          padding: 10px 12px; overflow-x: auto; }
+.md code { background: var(--surface-3); border-radius: 4px; padding: 1px 4px; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { border-left: 3px solid var(--hairline); margin: 10px 0; padding: 2px 12px;
+                 color: var(--ink-2); }
+.callout.contradiction { border: 1px solid var(--warn); border-left-width: 3px; border-radius: 6px;
+                         background: rgba(201,133,0,0.08); padding: 10px 12px; margin: 12px 0; }
+.my-take { border: 1px dashed var(--hairline); border-radius: 8px; padding: 10px 14px;
+           margin: 18px 0; background: var(--surface-2); }
+.wikilink.dead, .dead { color: var(--bad); }
+sup.fn a { font-size: 10px; padding: 0 2px; }
+sup.fn.dead a { color: var(--bad); }
+.linklist { list-style: none; margin: 6px 0 14px; padding: 0; }
+.linklist li { padding: 2px 0; }

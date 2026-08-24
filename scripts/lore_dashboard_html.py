@@ -9,8 +9,9 @@ ASSETS_DIR = Path(__file__).resolve().parent / "dashboard_assets"
 SHELL = "shell.html"
 CSS_ASSETS = ["app.css"]
 # Load order matters: core.js defines the helpers every later file calls,
+# md.js must load before views.js (the page view calls renderMarkdown), and
 # app.js runs last because it reads the finished view registry.
-JS_ASSETS = ["core.js", "app.js"]
+JS_ASSETS = ["core.js", "md.js", "views.js", "app.js"]
 PLACEHOLDER_RE = re.compile(r"__(TITLE|STYLE|SCRIPT|DATA)__")
 
 
