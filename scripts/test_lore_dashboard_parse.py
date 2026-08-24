@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from lore_dashboard_parse import (
+    build_graph,
     link_target_id,
     load_pages,
     parse_frontmatter,
@@ -286,6 +287,56 @@ class TestScanRaw(unittest.TestCase):
         (lore / "wiki" / "A_Page.md").write_text(page_file(
             "A Page", extra="sources:\n  - id: spec\n    resource: raw/spec.pdf#p3\n"))
         self.assertEqual(scan_raw(lore, parse_log(lore), load_pages(lore))[0]["pages"], ["A_Page"])
+
+
+class TestBuildGraph(unittest.TestCase):
+    def test_edges_dedupe_and_ghost_targets_become_ghost_nodes(self):
+        lore = make_lore({"A.md": page_file("A", body="[[B]] [[B|again]] [[Nowhere]]"),
+                          "B.md": page_file("B")})
+        graph = build_graph(load_pages(lore))
+        self.assertEqual(graph["edges"], [{"source": "A", "target": "B"},
+                                          {"source": "A", "target": "Nowhere"}])
+        ghost = next(n for n in graph["nodes"] if n["id"] == "Nowhere")
+        self.assertTrue(ghost["ghost"])
+        self.assertEqual(ghost["type"], "missing")
+
+    def test_degrees_are_directional(self):
+        lore = make_lore({"A.md": page_file("A", body="[[B]]"),
+                          "C.md": page_file("C", body="[[B]]"),
+                          "B.md": page_file("B")})
+        nodes = {n["id"]: n for n in build_graph(load_pages(lore))["nodes"]}
+        self.assertEqual((nodes["B"]["in"], nodes["B"]["out"]), (2, 0))
+        self.assertEqual((nodes["A"]["in"], nodes["A"]["out"]), (0, 1))
+
+    def test_inlinks_are_written_back_onto_page_records(self):
+        lore = make_lore({"A.md": page_file("A", body="[[B]]"), "B.md": page_file("B")})
+        pages = load_pages(lore)
+        build_graph(pages)
+        self.assertEqual({p["id"]: p["inlinks"] for p in pages}, {"A": [], "B": ["A"]})
+
+    def test_components_and_isolated_pages(self):
+        lore = make_lore({"A.md": page_file("A", body="[[B]]"), "B.md": page_file("B"),
+                          "Loose.md": page_file("Loose")})
+        graph = build_graph(load_pages(lore))
+        self.assertEqual(graph["components"], 2)
+        self.assertEqual(graph["isolated"], ["Loose"])
+
+    def test_a_page_linking_only_to_a_ghost_is_not_isolated(self):
+        lore = make_lore({"A.md": page_file("A", body="[[Nowhere]]")})
+        self.assertEqual(build_graph(load_pages(lore))["isolated"], [])
+
+    def test_self_link_is_dropped(self):
+        lore = make_lore({"A.md": page_file("A", body="see [[A]]")})
+        self.assertEqual(build_graph(load_pages(lore))["edges"], [])
+
+    def test_node_ordering_is_real_pages_by_id_then_ghosts_by_id(self):
+        # Two different source pages each pointing at a different ghost, chosen so a
+        # sort keyed on (source, target) — rather than on the ghost id alone — would
+        # emit the ghosts out of alphabetical order.
+        lore = make_lore({"A.md": page_file("A", body="[[Zeta]]"),
+                          "B.md": page_file("B", body="[[Alpha]]")})
+        ids = [n["id"] for n in build_graph(load_pages(lore))["nodes"]]
+        self.assertEqual(ids, ["A", "B", "Alpha", "Zeta"])
 
 
 if __name__ == "__main__":

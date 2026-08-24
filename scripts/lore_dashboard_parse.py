@@ -339,3 +339,56 @@ def scan_raw(lore, log, pages):
     order = {"NEW": 0, "CHANGED": 1, "SKIPPED": 2, "PROCESSED": 3}
     records.sort(key=lambda r: (order[r["state"]], r["name"]))
     return records
+
+
+def build_graph(pages):
+    """Wikilink graph over pages plus ghost nodes; fills each page's inlinks.
+
+    Node order is real pages sorted by id (the `pages` argument, already
+    sorted by `load_pages`) followed by ghost nodes sorted by id.
+    """
+    nodes = [{"id": p["id"], "title": p["title"], "type": p["type"] or "unknown",
+              "status": p["status"], "tags": list(p["tags"]), "ghost": False,
+              "in": 0, "out": 0, "component": 0}
+             for p in pages]
+    by_id = {n["id"]: n for n in nodes}
+    page_by_id = {p["id"]: p for p in pages}
+    for page in pages:
+        page["inlinks"] = []
+    edges, seen = [], set()
+    for page in pages:
+        for target in page["outlinks"]:
+            if target == page["id"] or (page["id"], target) in seen:
+                continue
+            seen.add((page["id"], target))
+            edges.append({"source": page["id"], "target": target})
+    ghost_ids = sorted({edge["target"] for edge in edges if edge["target"] not in by_id})
+    for target in ghost_ids:
+        ghost = {"id": target, "title": target.replace("_", " "), "type": "missing",
+                 "status": "", "tags": [], "ghost": True, "in": 0, "out": 0,
+                 "component": 0}
+        by_id[target] = ghost
+        nodes.append(ghost)
+    for edge in edges:
+        by_id[edge["source"]]["out"] += 1
+        by_id[edge["target"]]["in"] += 1
+        if edge["target"] in page_by_id:
+            page_by_id[edge["target"]]["inlinks"].append(edge["source"])
+    neighbours = {node["id"]: set() for node in nodes}
+    for edge in edges:
+        neighbours[edge["source"]].add(edge["target"])
+        neighbours[edge["target"]].add(edge["source"])
+    component = 0
+    unassigned = {node["id"] for node in nodes}
+    while unassigned:
+        stack = [min(unassigned)]
+        while stack:
+            current = stack.pop()
+            if current not in unassigned:
+                continue
+            unassigned.discard(current)
+            by_id[current]["component"] = component
+            stack.extend(n for n in neighbours[current] if n in unassigned)
+        component += 1
+    isolated = sorted(p["id"] for p in pages if not p["outlinks"] and not p["inlinks"])
+    return {"nodes": nodes, "edges": edges, "components": component, "isolated": isolated}
