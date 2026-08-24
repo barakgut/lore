@@ -140,10 +140,18 @@ class TestConnectivity(unittest.TestCase):
         lore = build_lore({"A.md": page_file("A", body="[[B]]"), "B.md": page_file("B", body="[[A]]")})
         self.assertEqual(check(score_for(lore), "connectivity", "components")["score"], 1.0)
 
-    def test_extra_components_lower_the_score(self):
-        lore = build_lore({"A.md": page_file("A", body="[[B]]"), "B.md": page_file("B"),
-                           "C.md": page_file("C", body="[[D]]"), "D.md": page_file("D")})
-        self.assertLess(check(score_for(lore), "connectivity", "components")["score"], 1.0)
+    def test_two_disconnected_clusters_score_the_components_formula_exactly(self):
+        # Two clusters of 10 pages each, chained internally (10 nodes per
+        # chain), never cross-linked -> graph["components"] == 2 for 20 pages.
+        # Formula: 1 - (components - 1) / max(1, ceil(pages/10))
+        #        = 1 - (2 - 1) / max(1, ceil(20/10)) = 1 - 1/2 = 0.5 (hand-derived).
+        pages = {}
+        for cluster in ("G1", "G2"):
+            for i in range(1, 11):
+                body = f"[[{cluster}_{i + 1}]]" if i < 10 else ""
+                pages[f"{cluster}_{i}.md"] = page_file(f"{cluster}_{i}", body=body)
+        lore = build_lore(pages)
+        self.assertAlmostEqual(check(score_for(lore), "connectivity", "components")["score"], 0.5)
 
 
 class TestProvenance(unittest.TestCase):
@@ -201,13 +209,25 @@ class TestOpenIssues(unittest.TestCase):
         self.assertEqual(len(check(result, "issues", "contradictions")["offenders"]), 1)
         self.assertEqual(len(check(result, "issues", "drafts")["offenders"]), 1)
 
-    def test_lint_within_30_days_is_unpenalised_and_older_is_penalised(self):
+    def test_lint_within_30_days_is_unpenalised(self):
         fresh = build_lore({"A.md": page_file("A")},
                            log_text="## [2026-08-20] lint | 0 fixed, 0 reported\n")
         self.assertEqual(check(score_for(fresh), "issues", "lint_age")["score"], 1.0)
+
+    def test_lint_exactly_30_days_old_is_still_at_the_grace_boundary(self):
+        # TODAY is 2026-08-24; 2026-07-25 is exactly 30 days earlier.
+        # "1.0 when days <= 30" is inclusive of the boundary itself.
+        boundary = build_lore({"A.md": page_file("A")},
+                              log_text="## [2026-07-25] lint | 0 fixed, 0 reported\n")
+        self.assertEqual(check(score_for(boundary), "issues", "lint_age")["score"], 1.0)
+
+    def test_lint_60_days_old_scores_the_penalty_formula_exactly(self):
+        # TODAY is 2026-08-24; 2026-06-25 is exactly 60 days earlier.
+        # Formula: max(0, 1 - (days - 30) / 60) = 1 - (60 - 30) / 60
+        #        = 1 - 0.5 = 0.5 (hand-derived).
         stale = build_lore({"A.md": page_file("A")},
-                           log_text="## [2026-01-01] lint | 0 fixed, 0 reported\n")
-        self.assertLess(check(score_for(stale), "issues", "lint_age")["score"], 1.0)
+                           log_text="## [2026-06-25] lint | 0 fixed, 0 reported\n")
+        self.assertAlmostEqual(check(score_for(stale), "issues", "lint_age")["score"], 0.5)
 
     def test_last_lint_counts_are_surfaced_with_an_age_in_days(self):
         lore = build_lore({"A.md": page_file("A")},
@@ -219,11 +239,22 @@ class TestOpenIssues(unittest.TestCase):
         lore = build_lore({"A.md": page_file("A")}, log_text="## [2026-08-20] init | created\n")
         self.assertIsNone(score_for(lore)["last_lint"])
 
-    def test_index_over_200_lines_lowers_the_index_size_check(self):
-        filler = "\n".join(f"prose line {n}" for n in range(260))
-        lore = build_lore({"A.md": page_file("A")},
-                          index_text=f"## Pages\n\n- [A](wiki/A.md) — hook\n{filler}\n")
-        self.assertLess(check(score_for(lore), "issues", "index_size")["score"], 1.0)
+    def test_index_at_the_200_line_boundary_scores_a_perfect_1_0(self):
+        # 3 header/entry lines + 197 filler lines = 200 lines, no trailing
+        # newline, so line_count == len(lines) == 200 exactly: at the target,
+        # not over it -> the "not oversize" branch scores 1.0 exactly.
+        lines = ["## Pages", "", "- [A](wiki/A.md) — hook"] + [f"prose line {n}" for n in range(197)]
+        lore = build_lore({"A.md": page_file("A")}, index_text="\n".join(lines))
+        self.assertEqual(check(score_for(lore), "issues", "index_size")["score"], 1.0)
+
+    def test_index_over_200_lines_scores_the_penalty_formula_exactly(self):
+        # 3 header/entry lines + 297 filler lines = 300 lines, no trailing
+        # newline, so line_count == len(lines) == 300 exactly.
+        # Formula: max(0, 1 - (line_count - 200) / 200) = 1 - (300 - 200) / 200
+        #        = 1 - 0.5 = 0.5 (hand-derived).
+        lines = ["## Pages", "", "- [A](wiki/A.md) — hook"] + [f"prose line {n}" for n in range(297)]
+        lore = build_lore({"A.md": page_file("A")}, index_text="\n".join(lines))
+        self.assertAlmostEqual(check(score_for(lore), "issues", "index_size")["score"], 0.5)
 
 
 if __name__ == "__main__":
