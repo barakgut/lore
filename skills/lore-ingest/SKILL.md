@@ -1,6 +1,6 @@
 ---
 name: lore-ingest
-description: Use when the user runs /lore:lore-ingest — find files in the lore's raw/ inbox that are not yet in log.md, distill each into wiki pages by content type, update index.md and log.md, and commit.
+description: Use when the user runs /lore:lore-ingest — find files in the lore's raw/ inbox that are new or changed since their last ledger entry, distill or surgically update wiki pages by content type, update index.md and log.md, and commit.
 ---
 
 # /lore:lore-ingest
@@ -9,35 +9,58 @@ Follow the `lore` skill for all conventions — including its **Finding the lore
 
 Default flow is interactive: after each file, surface the key takeaways in the report so the user can steer emphasis before the next one. If the user asks for a batch run, process everything straight through and report once at the end.
 
-## 1. Find new files
+## 1. Find new and changed files
 
 ```bash
 find "$LORE/raw" -type f -printf '%P\n'
 ```
 (`find`, not `ls` — a dropped folder of documents and dotfiles must be seen too; paths are relative to `raw/`.)
 
-A file counts as already-processed iff `log.md` contains an entry heading whose filename field is exactly that filename: `^## \[YYYY-MM-DD\] (ingest|skip) \| <filename>$`. Match the whole field, anchored at both ends — never a substring: `spec.pdf` occurs inside the heading for `v2_spec.pdf`, so a substring test (`rg -F "spec.pdf"`) would classify a newly dropped `spec.pdf` as already processed and silently never ingest it. Everything else is NEW.
+Each found file is in one of three states, decided against `log.md` (the
+ledger) and the file's content hash:
 
-`rg -F` cannot anchor, so test each candidate with the filename regex-escaped:
+- **NEW** — no ledger entry for this filename. Process per §2.
+- **PROCESSED** — the latest ledger entry for this filename matches the current
+  file's hash (or records no hash, in which case no change can be detected).
+  Skip.
+- **CHANGED** — the latest ledger entry's recorded hash differs from the
+  current file: the raw file was replaced or edited outside the lore flow.
+  Update per §2b.
+
+A ledger entry for a filename is a heading matching
+`^## \[YYYY-MM-DD\] (ingest|skip) \| <filename>$` — match the whole filename
+field, anchored at both ends, never a substring: `spec.pdf` occurs inside the
+heading for `v2_spec.pdf`, so a substring test (`rg -F "spec.pdf"`) would
+classify a newly dropped `spec.pdf` as already processed and silently never
+ingest it. The log is append-only, so the last matching heading is the latest.
+Classify each candidate:
 
 ```bash
-python3 - "$LORE/log.md" "<filename>" <<'PY'
-import re, sys
-log = open(sys.argv[1], encoding='utf-8').read()
-pat = r'^## \[[0-9-]{10}\] (?:ingest|skip) \| ' + re.escape(sys.argv[2]) + r'\s*$'
-print("PROCESSED" if re.search(pat, log, re.M) else "NEW")
+python3 - "$LORE" "<filename>" <<'PY'
+import hashlib, re, sys
+from pathlib import Path
+lore = Path(sys.argv[1]); name = sys.argv[2]
+log = (lore / "log.md").read_text(encoding="utf-8")
+pat = r'^## \[[0-9-]{10}\] (?:ingest|skip) \| ' + re.escape(name) + r'\s*$'
+matches = list(re.finditer(pat, log, re.M))
+if not matches:
+    print("NEW"); sys.exit()
+detail = log[matches[-1].end():].split('\n## ', 1)[0]      # latest entry wins
+m = re.search(r'sha256:([0-9a-f]{12})', detail)
+cur = hashlib.sha256((lore / "raw" / name).read_bytes()).hexdigest()[:12]
+print("CHANGED" if (m and m.group(1) != cur) else "PROCESSED")
 PY
 ```
 
-**Re-ingest:** if the user names a specific file, process it regardless of the ledger and append a fresh `ingest` entry — that is how a page written under a limitation (e.g. a `card` written while openpyxl was absent) gets upgraded.
+**Re-ingest:** if the user names a specific file, process it regardless of the ledger and append a fresh `ingest` entry — that is how a page written under a limitation (e.g. a `card` written while openpyxl was absent) gets upgraded. The fresh entry records the current hash, so the ledger's latest-entry-wins rule resets cleanly.
 
 **Existing notes:** also treat any `$LORE/wiki/*.md` with no YAML frontmatter as new — add frontmatter, an `index.md` line, and an `ingest` log entry (§9 bootstrapping: notes copied in from a prior system).
 
-If no new files: report "nothing to ingest" and stop (no commit).
+If nothing is NEW or CHANGED: report "nothing to ingest" and stop (no commit).
 
 ## 2. Process each new file by type
 
-Before creating ANY page: `rg -i` the candidate title in `$LORE/index.md` and over `wiki/` filenames — if a page on that topic exists, UPDATE it (merge new facts, bump `freshness`, add the new `source`) instead of creating a duplicate. When updating, never rewrite, reorder, or delete a `## My Take` section — those are human-owned; add your new material outside them.
+Before creating ANY page: `rg -i` the candidate title in `$LORE/index.md` and over `wiki/` filenames — if a page on that topic exists, UPDATE it (merge new facts, bump `generated`, append a `sources[]` entry) instead of creating a duplicate. When updating, never rewrite, reorder, or delete a `## My Take` section — those are human-owned; add your new material outside them.
 
 - **PDF** — Read it directly (page ranges for large files). Write one `type: source` page summarizing the document, plus `type: concept` pages for major topics (typically one per chapter/subsystem; merge into existing concept pages when they exist). Verify any table/register values against the PDF page before writing them; cite `raw/<file>#p<n>` on every hard number.
 - **Image (png/jpg/gif/webp/svg)** — Read it. Write/extend a page with a structured caption: image kind (schematic / scope shot / photo / diagram), visible labels, designators, settings, and what it shows. The caption is for retrieval only — note in the page: "re-read the image for analysis; do not trust this caption for connectivity."
@@ -45,13 +68,55 @@ Before creating ANY page: `rg -i` the candidate title in `$LORE/index.md` and ov
 - **Markdown / txt / html** — Read directly; write/extend `source`/`concept` pages. For html, ignore boilerplate; distill content.
 - **Anything else** — do not guess. Append a `skip` entry to `log.md` with the reason and list it in the final report.
 
-Every page gets full frontmatter (`type`, `title`, `source`, `captured`, `freshness`, `trust: extracted`) and wikilinks to related existing pages. If a new source contradicts an existing page, add a `> ⚠ CONTRADICTION:` block to that page — do not pick a winner.
+Every page gets full frontmatter per the `lore` skill's page schema: `type`,
+`title`, `description` (one line — it becomes the page's index hook), `tags`,
+`sources[]` (entries `{id, resource, title?}`; `id` mandatory when the body
+uses footnotes), `generated: {by: lore/<model-id>, at: <today>}` — plus
+wikilinks to related existing pages. Footnote discipline: a page citing 2+
+`sources` entries ends every nontrivial claim with `[^<id>]`; a single-source
+page uses none (inline `#p<n>` anchors where precision matters). If a new
+source contradicts an existing page, add a `> ⚠ CONTRADICTION:` block to that
+page — do not pick a winner.
+
+## 2b. Update pages for a CHANGED file
+
+The raw file's content no longer matches what its pages were distilled from.
+Never rewrite affected pages from scratch — apply the delta:
+
+1. **Affected pages:** `rg -l -F 'raw/<file>' "$LORE/wiki/"` —
+   `sources[].resource` entries (and inline citations) are the reverse index
+   from a raw file to its pages.
+2. **The delta:** raw/ is committed on every ingest, so
+   `git -C "$LORE" diff -- "raw/<file>"` shows exactly what changed. If the
+   lore is `--no-git`, or the diff is empty (the new version was committed by
+   hand): fall back to a full re-read of the file and a semantic comparison
+   against the affected pages.
+3. **Apply only the delta, claim by claim:**
+   - A changed claim backed only by this source → **supersession**: rewrite the
+     claim in place; no contradiction marker.
+   - A changed claim also backed by a *different* source that still states the
+     old value → add a `> ⚠ CONTRADICTION:` block; never pick a winner.
+   - A claim whose backing was deleted from the source → remove it from the
+     page. A page left with no live claims → set `status: deprecated` and move
+     its index line to `## Deprecated` (do not delete the file).
+4. Bump `generated` (`by` = this actor, `at` = today) on every touched page;
+   fix any `sources[].resource` anchor (`#p<n>`) that moved.
+5. Append a fresh `ingest` ledger entry with the **new** hash (§3) — it becomes
+   the latest entry for the filename.
 
 ## 3. Update index.md and log.md
 
-- Add one line per new page under the right `##` group (create the group if needed); respect the caps from the `lore` skill.
-- Append one `ingest` entry per processed file:
-  `## [YYYY-MM-DD] ingest | <filename>` + one line: pages created/updated.
+- Add one line per new page under the right `##` group (create the group if
+  needed); the hook is the page's `description`, tightened to the caps from the
+  `lore` skill. Deprecated pages' lines move to `## Deprecated`.
+- Append one `ingest` entry per processed file (NEW and CHANGED alike):
+
+  ```
+  ## [YYYY-MM-DD] ingest | <filename>
+  sha256:<hash> — pages created/updated.
+  ```
+
+  where `<hash>` = `sha256sum "$LORE/raw/<filename>" | cut -c1-12`.
 
 ## 4. Commit and report
 
