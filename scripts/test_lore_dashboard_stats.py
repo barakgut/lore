@@ -137,6 +137,26 @@ class TestGraphStats(unittest.TestCase):
         hubs = stats_for(lore)["graph"]["hubs"]
         self.assertEqual([h["id"] for h in hubs], ["HubA", "HubB"])
 
+    def test_ghost_nodes_are_hub_candidates_and_carry_their_derived_title(self):
+        # Ruling: ghost nodes are NOT excluded from hub candidacy — the
+        # module iterates all of graph["nodes"] (real pages + ghosts)
+        # unfiltered, matching the plan's own reference code. A ghost with
+        # more inbound links than any real page is the most actionable
+        # fact the graph holds (the page the lore most wants and does not
+        # have), so it must surface as the top hub, complete with its
+        # derived title.
+        #
+        # Missing_Page does not exist as a page. A, B, and C each link to
+        # it, giving it in-degree 3; only C also links to A, giving A
+        # in-degree 1. Per build_graph, a ghost's title is its id with "_"
+        # replaced by " ": "Missing_Page" -> "Missing Page".
+        lore = build_lore({"A.md": page_file("A", body="[[Missing_Page]]"),
+                           "B.md": page_file("B", body="[[Missing_Page]]"),
+                           "C.md": page_file("C", body="[[Missing_Page]] [[A]]")})
+        hubs = stats_for(lore)["graph"]["hubs"]
+        self.assertEqual(hubs, [{"id": "Missing_Page", "title": "Missing Page", "count": 3},
+                                {"id": "A", "title": "A", "count": 1}])
+
 
 class TestLogStats(unittest.TestCase):
     def test_verbs_answers_discards_and_iso_weeks(self):
