@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Assemble the self-contained dashboard HTML from the payload plus assets."""
+import html
 import json
 import re
 from pathlib import Path
@@ -28,7 +29,12 @@ def encode_payload(payload):
 def build_html(payload, assets_dir=ASSETS_DIR):
     """The finished page. Every placeholder is substituted in a single pass."""
     values = {
-        "TITLE": f"{payload['meta']['lore_name']} — lore dashboard",
+        # TITLE is payload-derived (lore_name comes from a directory basename,
+        # which is not restricted to HTML-safe characters) and lands inside
+        # <title>__TITLE__</title>, so it must be HTML-escaped like DATA is
+        # JSON/`<`-escaped. STYLE and SCRIPT are our own asset files, not
+        # payload-derived — escaping them would corrupt the CSS/JS.
+        "TITLE": html.escape(f"{payload['meta']['lore_name']} — lore dashboard"),
         "STYLE": "\n".join(_read_asset(assets_dir, name) for name in CSS_ASSETS),
         "SCRIPT": "\n".join(_read_asset(assets_dir, name) for name in JS_ASSETS),
         "DATA": encode_payload(payload),

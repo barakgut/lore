@@ -104,6 +104,28 @@ class TestBuildHtml(unittest.TestCase):
         self.assertIn("function boot()", page)
         self.assertIn(":root {", page)
 
+    def test_hostile_lore_name_is_html_escaped_in_title(self):
+        # lore_name is payload-derived (Task 7 populates it from a directory
+        # basename, which is not restricted to HTML-safe characters) and it
+        # lands inside <title>__TITLE__</title>. A hostile basename must not
+        # be able to close the title element and inject markup into <head>.
+        payload = dict(PAYLOAD)
+        payload["meta"] = dict(
+            PAYLOAD["meta"], lore_name="evil</title><script>alert(1)</script>")
+        page = build_html(payload)
+
+        # The raw, unescaped hazard must not survive anywhere in the page.
+        self.assertNotIn("</title><script>alert(1)</script>", page)
+        self.assertNotIn("<script>alert(1)</script>", page)
+
+        # The <title> element is escaped and still closes exactly where it
+        # should — pinned literally so the test fails if escaping is removed.
+        expected_title = (
+            "<title>evil&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;"
+            " — lore dashboard</title>"
+        )
+        self.assertIn(expected_title, page)
+
 
 @unittest.skipUnless(shutil.which("node"), "node not installed — JS syntax check skipped")
 class TestJsSyntax(unittest.TestCase):
