@@ -30,7 +30,7 @@ Follow the `lore` skill for all conventions — including its **Finding the lore
    **Deprecated placement** — a `status: deprecated` page whose index line is
    not under `## Deprecated`. FIX: move the line there.
 7. **Frontmatter validity** — against the `lore` skill's page schema:
-   mandatory `type` (one of the allowed five), `title`, `description`,
+   mandatory `type` (one of the allowed five), `title`, `description`, `tags`,
    `sources` (each entry with a `resource`; `id` on every entry when the body
    contains `[^` footnotes), and `generated` with both `by` and `at`. `status`,
    if present, must be `draft`, `stable`, or `deprecated`. FIX missing/typo'd
