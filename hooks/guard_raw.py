@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: deny Edit/Write/NotebookEdit targeting files under a lore's raw/.
+"""PreToolUse guard: raw/ is immutable, and dashboard.html is human-only.
 
-A lore self-describes: the directory containing raw/ must hold index.md, wiki/,
-and CLAUDE.md. Any other raw/ directory is none of our business. On a match,
-print a PreToolUse deny decision; otherwise print nothing (no opinion), so the
-normal permission flow continues. Never exit non-zero: a guard that crashes
-must not block unrelated edits.
+A lore self-describes: the directory containing raw/ (or dashboard.html) must
+hold index.md, wiki/, and CLAUDE.md. Any other raw/ directory or dashboard.html
+is none of our business. Two rules:
 
-Not a hard security boundary: realpath() resolves symlinks before the raw/
-basename check runs, so a symlinked raw/ directory escapes detection; this is
-defense-in-depth over the skills' own raw/-is-immutable instructions, and Bash
-is unhooked by design regardless.
+1. Edit/Write/MultiEdit/NotebookEdit targeting a path under a self-describing
+   lore's raw/ are denied — originals are ground truth, distill into wiki/.
+2. Any matched tool, Read included, targeting a self-describing lore's
+   <lore>/dashboard.html is denied — it's a generated, human-only view;
+   read index.md, wiki/, and log.md instead.
+
+On a match, print a PreToolUse deny decision; otherwise print nothing (no
+opinion), so the normal permission flow continues. Never exit non-zero: a
+guard that crashes must not block unrelated tool calls.
+
+Not a hard security boundary: realpath() resolves symlinks before either
+basename check runs, so a symlinked raw/ directory, or a symlink named
+dashboard.html pointing elsewhere, escapes detection; this is defense-in-depth
+over the skills' own instructions, and Bash is unhooked by design regardless.
 """
 import json
 import os
 import sys
+
+DASHBOARD = "dashboard.html"
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 def lore_root_for(path):
@@ -35,6 +46,28 @@ def lore_root_for(path):
         p = parent
 
 
+def lore_root_of(path):
+    """Return the lore root if `path` sits directly inside one, else None."""
+    root = os.path.dirname(path)
+    if (
+        os.path.isfile(os.path.join(root, "index.md"))
+        and os.path.isdir(os.path.join(root, "wiki"))
+        and os.path.isfile(os.path.join(root, "CLAUDE.md"))
+    ):
+        return root
+    return None
+
+
+def deny(reason):
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -50,19 +83,21 @@ def main():
         if not os.path.isabs(target):
             target = os.path.join(data.get("cwd") or os.getcwd(), target)
         target = os.path.realpath(target)
-        root = lore_root_for(target)
-        if root:
-            print(json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        f"{target} is inside {root}/raw/ — raw/ is immutable; "
-                        "originals are ground truth. Write distilled content to "
-                        "wiki/ instead."
-                    ),
-                }
-            }))
+
+        tool = data.get("tool_name") or ""
+        if os.path.basename(target) == DASHBOARD:
+            root = lore_root_of(target)
+            if root:
+                deny(f"{target} is {root}'s dashboard.html — a human-only view, "
+                     "regenerated with scripts/lore_dashboard.py. Read index.md, "
+                     "wiki/ and log.md instead.")
+                return
+        if tool in WRITE_TOOLS:
+            root = lore_root_for(target)
+            if root:
+                deny(f"{target} is inside {root}/raw/ — raw/ is immutable; "
+                     "originals are ground truth. Write distilled content to "
+                     "wiki/ instead.")
     except Exception:
         return
 
