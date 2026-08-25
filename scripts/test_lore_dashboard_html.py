@@ -1225,7 +1225,19 @@ function makeNode(tag) {
     nodeType: 1, tag: tag, _className: "", attrs: {}, children: [], listeners: {}, _text: null,
     setAttribute(key, value) { this.attrs[key] = value; },
     addEventListener(type, fn) { this.listeners[type] = fn; },
-    append(...kids) { for (const k of kids) if (k !== undefined && k !== null) this.children.push(k); },
+    // Appending a DocumentFragment splices its children in and empties it,
+    // exactly as the real DOM does — renderMarkdown() builds into a fragment
+    // and renderPage() then appends that fragment to a <section>.
+    append(...kids) {
+      for (const k of kids) {
+        if (k === undefined || k === null) continue;
+        if (k.tag === "#fragment") { this.children.push(...k.children); k.children = []; }
+        else this.children.push(k);
+      }
+    },
+    // appendChild returns the appended child, as the DOM does — that return
+    // value is how renderMarkdown() gets hold of a nested <ul>/<ol>.
+    appendChild(child) { this.append(child); return child; },
     // firstChild/removeChild are what core.js's clear() walks — the Log
     // view's filters clear and refill their results <tbody> in place.
     get firstChild() { return this.children[0] || null; },
@@ -1241,12 +1253,18 @@ function makeNode(tag) {
   };
 }
 
-const loreJson = fs.readFileSync(process.argv[4], "utf8");
+const loreJson = fs.readFileSync(process.argv[2], "utf8");
+// The header's search box lives outside #view, so renderSearch() reads and
+// writes its .value rather than owning it — one persistent stub node.
+const searchBox = makeNode("input");
+searchBox.value = "";
 global.document = {
   createElement: (tag) => makeNode(tag),
   createElementNS: (ns, tag) => makeNode(tag),
   createTextNode: (text) => ({ nodeType: 3, text: String(text) }),
-  getElementById: (id) => (id === "lore-data" ? { textContent: loreJson } : makeNode("div")),
+  createDocumentFragment: () => makeNode("#fragment"),
+  getElementById: (id) => (id === "lore-data" ? { textContent: loreJson }
+                           : id === "global-search" ? searchBox : makeNode("div")),
 };
 global.window = { location: { hash: "" }, LORE_QUERY: undefined };
 global.navigator = { clipboard: null };
@@ -1266,8 +1284,11 @@ global.route = function () {};
 // the canvas-drawing half.
 global.requestAnimationFrame = function () {};
 
-const coreSrc = fs.readFileSync(process.argv[2], "utf8");
-const viewsSrc = fs.readFileSync(process.argv[3], "utf8");
+// argv[3:] are the JS assets to load, in manifest order (core.js, md.js,
+// search.js, views.js — graph.js and app.js are the two the harness leaves
+// out; every entry point into them here is behind a stubbed
+// requestAnimationFrame or the stubbed route()).
+const assetSrc = process.argv.slice(3).map(p => fs.readFileSync(p, "utf8")).join("\\n");
 // Declared with `function`, not `const`, so indirect eval hoists it onto
 // the global object the same way renderHealth/renderStats below are —
 // closing over the same LORE binding those functions do, purely so this
@@ -1275,7 +1296,7 @@ const viewsSrc = fs.readFileSync(process.argv[3], "utf8");
 // exercising the log view's filters never mutates the payload's own array.
 const introspectionSrc =
   "function __logEntryLines(){ return LORE.log.entries.map(function(e){ return e.line; }); }";
-(0, eval)(coreSrc + "\\n" + viewsSrc + "\\n" + introspectionSrc);
+(0, eval)(assetSrc + "\\n" + introspectionSrc);
 
 function findButton(node, label) {
   if (!node || node.nodeType !== 1) return null;
@@ -1346,7 +1367,25 @@ const logAfterDateFilter = renderLog();
 
 const afterFilterLines = __logEntryLines();
 
+// renderMarkdown() over one representative page body, then the three views
+// that had no executed coverage at all. renderPage() defers its mini graph
+// behind requestAnimationFrame (stubbed inert), so graph.js is not needed;
+// renderSearch() reads the header search box, which the tag chip click
+// above already filled with "tag:foo".
+const mdPage = pageById("concept-a");
+const markdown = serialize(renderMarkdown(mdPage.body, mdPage));
+const pageNode = serialize(renderPage("concept-a"));
+const missingPageNode = serialize(renderPage("no-such-page"));
+const browseNode = serialize(renderBrowse());
+const searchNode = serialize(renderSearch());
+
 process.stdout.write(JSON.stringify({
+  markdown: markdown,
+  page: pageNode,
+  missingPage: missingPageNode,
+  browse: browseNode,
+  search: searchNode,
+  searchBoxValue: searchBox.value,
   health: serialize(healthNode),
   stats: serialize(statsNode),
   chipFound: !!chip,
@@ -1371,8 +1410,82 @@ process.stdout.write(JSON.stringify({
 # differing counts (8 and 2, both against max 8) to pin countTable's bar
 # scaling by hand; pages_by_generator is deliberately empty to exercise
 # countTable's "Nothing to show." fallback; tags includes "foo" to click.
+#
+# MARKDOWN_BODY is the one page body renderMarkdown() is pinned against. It
+# exercises every construct the renderer has a branch for: an ATX heading, a
+# paragraph carrying a wikilink, a [^id] footnote and a raw-HTML tag (which
+# must come out as inert text), a fenced code block with a language, a
+# pipe table, a two-level list, a plain blockquote, a ⚠ CONTRADICTION
+# callout, and the "## My Take" heading that retargets everything after it
+# into its own human-owned section.
+MARKDOWN_BODY = """# Overview
+
+Intro with a [[Wiki Page]] link, a footnote[^spec] and <b>raw html</b>.
+
+```js
+const x = 1;
+```
+
+| col a | col b |
+| --- | --- |
+| one | two |
+
+- top level
+  - nested one
+- second top
+
+> a plain quote
+
+> ⚠ CONTRADICTION the spec says otherwise
+
+## My Take
+
+Human-owned commentary.
+"""
+
 RENDERED_VIEWS_PAYLOAD = {
-    "pages": [{"id": "concept-a", "title": "Concept A"}, {"id": "Wiki_Page", "title": "Wiki Page"}],
+    # Two full page records: renderPage() reads every frontmatter field, the
+    # sources list, both link directions and the body; renderSearch() scores
+    # over title/tags/description/body; renderMarkdown() resolves [[Wiki
+    # Page]] against the second record and [^spec] against the first one's
+    # sources[].
+    "pages": [
+        {"id": "concept-a", "title": "Concept A", "type": "concept", "status": "stable",
+         "description": "what concept a is", "tags": ["foo"],
+         "sources": [{"id": "spec", "resource": "raw/spec.pdf", "title": "The Spec",
+                      "anchor": "", "href": "../raw/spec.pdf", "exists": True,
+                      "abs": "/home/u/lore/raw/spec.pdf"}],
+         "generated": {"by": "lore/test", "at": "2026-08-01"},
+         "body": MARKDOWN_BODY, "outlinks": ["Wiki_Page"], "inlinks": [],
+         "file": "wiki/concept-a.md", "href": "../wiki/concept-a.md",
+         "abs": "/home/u/lore/wiki/concept-a.md"},
+        {"id": "Wiki_Page", "title": "Wiki Page", "type": "source", "status": "deprecated",
+         "description": "", "tags": [], "sources": [],
+         "generated": {"by": "", "at": ""}, "body": "Plain body.",
+         "outlinks": [], "inlinks": ["concept-a"],
+         "file": "wiki/Wiki_Page.md", "href": "../wiki/Wiki_Page.md",
+         "abs": "/home/u/lore/wiki/Wiki_Page.md"},
+    ],
+    # renderBrowse() reads only LORE.index: two groups (one of them the
+    # ## Deprecated section, which must ship collapsed), one ghost entry
+    # pointing at a file that does not exist, and no orphans.
+    "index": {
+        "line_count": 8, "entry_count": 3,
+        "groups": [
+            {"heading": "Concepts", "deprecated": False, "entries": [
+                {"title": "Concept A", "target": "wiki/concept-a.md", "id": "concept-a",
+                 "hook": "what concept a is", "chars": 60, "exists": True},
+                {"title": "Gone", "target": "wiki/Gone.md", "id": "Gone",
+                 "hook": "points nowhere", "chars": 40, "exists": False},
+            ]},
+            {"heading": "Deprecated", "deprecated": True, "entries": [
+                {"title": "Wiki Page", "target": "wiki/Wiki_Page.md", "id": "Wiki_Page",
+                 "hook": "", "chars": 40, "exists": True},
+            ]},
+        ],
+        "orphans": [], "over_cap": [], "misplaced_deprecated": [],
+        "ghost_entries": [{"title": "Gone", "target": "wiki/Gone.md"}],
+    },
     # renderGraph() only reads LORE.graph.nodes to build its type/status/tag
     # filter <select>s — three nodes chosen to pin the exact option lists:
     # a "missing" ghost type (types include it, statuses filter it out since
@@ -1588,8 +1701,9 @@ class TestRenderedViews(unittest.TestCase):
             payload_path.write_text(json.dumps(payload if payload is not None
                                                 else RENDERED_VIEWS_PAYLOAD), encoding="utf-8")
             result = subprocess.run(
-                ["node", str(runner), str(ASSETS_DIR / "core.js"), str(ASSETS_DIR / "views.js"),
-                 str(payload_path)],
+                ["node", str(runner), str(payload_path)]
+                + [str(ASSETS_DIR / name)
+                   for name in ("core.js", "md.js", "search.js", "views.js")],
                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -1878,6 +1992,140 @@ class TestRenderedViews(unittest.TestCase):
         out = self._render()
         hosts = list(_rv_find_all(out["graph"], lambda n: n.get("class") == "graph-host"))
         self.assertEqual(len(hosts), 1)
+
+    # -- renderMarkdown, and the page/browse/search views ------------------
+    #    md.js is the largest and most security-sensitive JS here: ~180
+    #    lines of stateful line-scanning over a page body, which is
+    #    untrusted content. Everything below runs the real renderer against
+    #    MARKDOWN_BODY and pins the tree it produces.
+
+    def test_markdown_block_structure_is_pinned_end_to_end(self):
+        out = self._render()
+        blocks = [(c["tag"], c.get("class")) for c in out["markdown"]["children"]]
+        self.assertEqual(blocks, [
+            ("h2", None),                       # "# Overview": rendered one level down
+            ("p", None),
+            ("pre", None),
+            ("table", None),
+            ("ul", None),
+            ("blockquote", None),
+            ("div", "callout contradiction"),
+            ("section", "my-take"),
+        ])
+
+    def test_markdown_inline_wikilink_and_footnote_resolve_against_the_page(self):
+        out = self._render()
+        paragraph = out["markdown"]["children"][1]
+        link = next(_rv_find_all(paragraph, lambda n: n.get("class") == "wikilink"))
+        self.assertEqual(link["attrs"].get("href"), "#page/Wiki_Page")
+        self.assertEqual(_rv_all_text(link), "Wiki Page")     # spaces -> underscores in the id
+        footnote = next(_rv_find_all(paragraph, lambda n: n.get("tag") == "sup"))
+        self.assertEqual(footnote["class"], "fn")             # "fn dead" if sources[] lacked it
+        anchor = footnote["children"][0]
+        self.assertEqual(anchor["attrs"].get("href"), "../raw/spec.pdf")
+        self.assertEqual(anchor["attrs"].get("title"), "raw/spec.pdf")
+        self.assertEqual(_rv_all_text(anchor), "spec")
+
+    def test_raw_html_in_a_body_renders_as_inert_text(self):
+        # The whole point of building this tree with el()/textContent: a page
+        # body is untrusted, so "<b>raw html</b>" must survive as characters
+        # in a text node and never become an element.
+        out = self._render()
+        self.assertIn("<b>raw html</b>", _rv_all_text(out["markdown"]))
+        self.assertEqual(list(_rv_find_all(out["markdown"], lambda n: n.get("tag") == "b")), [])
+
+    def test_markdown_fence_table_and_nested_list(self):
+        out = self._render()
+        pre, table, unordered = (out["markdown"]["children"][i] for i in (2, 3, 4))
+        self.assertEqual(pre["attrs"].get("data-lang"), "js")
+        self.assertEqual(pre["children"][0]["tag"], "code")
+        self.assertEqual(pre["children"][0]["text"], "const x = 1;")
+
+        head_row = table["children"][0]["children"][0]
+        self.assertEqual([_rv_all_text(cell) for cell in head_row["children"]], ["col a", "col b"])
+        body_rows = table["children"][1]["children"]
+        # The separator row is consumed, never rendered as data.
+        self.assertEqual([[_rv_all_text(c) for c in row["children"]] for row in body_rows],
+                         [["one", "two"]])
+
+        first, second = unordered["children"]
+        self.assertEqual(first["children"][0]["text"], "top level")
+        nested = first["children"][1]
+        self.assertEqual(nested["tag"], "ul")            # nested inside its parent <li>
+        self.assertEqual(_rv_all_text(nested), "nested one")
+        self.assertEqual(_rv_all_text(second), "second top")
+
+    def test_markdown_quote_callout_and_my_take_retargeting(self):
+        out = self._render()
+        quote, callout, my_take = (out["markdown"]["children"][i] for i in (5, 6, 7))
+        self.assertEqual(_rv_all_text(quote), "a plain quote")
+        # The ⚠ marker is lifted into its own <strong> and stripped from the
+        # quoted text, and the block becomes a callout div, not a blockquote.
+        self.assertEqual(callout["children"][0]["text"], "⚠ ")
+        self.assertEqual(_rv_all_text(callout), "⚠ CONTRADICTION the spec says otherwise")
+        # Everything after the "## My Take" heading is retargeted into the
+        # human-owned section rather than continuing at the top level — which
+        # is why the fragment above has exactly 8 children, not 9.
+        self.assertEqual([c["tag"] for c in my_take["children"]], ["h3", "p", "p"])
+        self.assertEqual(my_take["children"][0]["text"], "My Take")
+        self.assertEqual(my_take["children"][1]["text"],
+                         "human-owned — the agent never edits this")
+        self.assertEqual(_rv_all_text(my_take["children"][2]), "Human-owned commentary.")
+
+    def test_page_view_embeds_the_rendered_body_and_both_link_directions(self):
+        out = self._render()
+        body = next(_rv_find_all(out["page"], lambda n: n.get("class") == "md"))
+        # The fragment's blocks are spliced into <section class="md">, not
+        # wrapped in another node.
+        self.assertEqual([c["tag"] for c in body["children"]],
+                         [c["tag"] for c in out["markdown"]["children"]])
+        self.assertEqual([c["text"] for c in out["page"]["children"] if c.get("tag") == "h3"],
+                         ["Sources", "Linked from (0)", "Links to (1)", "Health flags"])
+        outbound = out["page"]["children"][10]
+        self.assertEqual(outbound["class"], "linklist")
+        self.assertEqual(next(_rv_find_all(outbound, lambda n: n.get("tag") == "a"))
+                         ["attrs"].get("href"), "#page/Wiki_Page")
+        flags = [li["text"] for li in _rv_find_all(out["page"]["children"][12],
+                                                   lambda n: n.get("tag") == "li")]
+        self.assertEqual(flags, ["Integrity · Dead wikilinks — dead wikilinks: x",
+                                 "Integrity · Duplicate titles — title collides",
+                                 "Connectivity · Pages with no inbound link — no page links here"])
+
+    def test_page_view_for_an_unknown_id_is_an_empty_notice(self):
+        out = self._render()
+        missing = out["missingPage"]
+        self.assertEqual((missing["tag"], missing["class"], missing["text"]),
+                         ("p", "empty", "No page with id no-such-page"))
+
+    def test_browse_view_renders_groups_a_ghost_entry_and_the_index_header(self):
+        out = self._render()
+        header = out["browse"]["children"][0]
+        self.assertEqual(header["text"], "index.md — 3 entries, 8 lines")
+        details = list(_rv_find_all(out["browse"], lambda n: n.get("tag") == "details"))
+        self.assertEqual([_rv_all_text(d["children"][0]) for d in details],
+                         ["Concepts  2", "Deprecated  1"])
+        self.assertEqual(details[0]["attrs"].get("open"), "")
+        self.assertNotIn("open", details[1]["attrs"])   # ## Deprecated ships collapsed
+        # The entry pointing at a missing file is inert text plus a note —
+        # never a link into a page route that cannot resolve.
+        ghost_entry = details[0]["children"][1]["children"][1]
+        self.assertEqual(list(_rv_find_all(ghost_entry, lambda n: n.get("tag") == "a")), [])
+        self.assertEqual(_rv_all_text(ghost_entry), "Gone — points nowhere (missing file)")
+
+    def test_search_view_runs_the_query_a_tag_chip_click_left_behind(self):
+        out = self._render()
+        self.assertEqual(out["searchBoxValue"], "tag:foo")
+        heading = next(c for c in out["search"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(heading["text"], "1 result(s) for “tag:foo”")
+        results = next(c for c in out["search"]["children"] if c.get("class") == "results")
+        [result] = results["children"]
+        self.assertEqual(next(_rv_find_all(result, lambda n: n.get("tag") == "a"))
+                         ["attrs"].get("href"), "#page/concept-a")
+        self.assertIn("matched in tags", _rv_all_text(result))
+        # No body match for a tag: term, so the snippet falls back to the
+        # page description.
+        snippet = next(_rv_find_all(result, lambda n: n.get("class") == "muted snippet"))
+        self.assertEqual(_rv_all_text(snippet), "what concept a is")
 
 
 if __name__ == "__main__":
