@@ -121,6 +121,20 @@ def _as_dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _text(value):
+    """One frontmatter scalar as a string.
+
+    The mini-parser returns a list for a block list and a dict for an indented
+    mapping, so a page whose `title:`/`status:`/`description:` is followed by
+    an indented block hands back a container where a string belongs. Coerce it
+    to "" — the caller's own fallback (the filename stem, "stable") then
+    applies exactly as it does for an absent key, and the schema health check
+    reports the page as an offender instead of the build dying on
+    `"".lower()`-style calls downstream.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def _sources(value):
     """Normalise sources[] to a list of dicts; a bare string keeps its resource."""
     out = []
@@ -152,10 +166,10 @@ def load_pages(lore):
         pages.append({
             "id": path.stem,
             "file": f"wiki/{path.name}",
-            "title": fields.get("title") or path.stem.replace("_", " "),
-            "type": fields.get("type", "") if isinstance(fields.get("type", ""), str) else "",
-            "status": fields.get("status") or "stable",
-            "description": fields.get("description", ""),
+            "title": _text(fields.get("title")) or path.stem.replace("_", " "),
+            "type": _text(fields.get("type")),
+            "status": _text(fields.get("status")) or "stable",
+            "description": _text(fields.get("description")),
             "tags": [str(t) for t in _as_list(fields.get("tags"))],
             "sources": _sources(fields.get("sources")),
             "generated": {"by": _as_dict(fields.get("generated")).get("by", ""),

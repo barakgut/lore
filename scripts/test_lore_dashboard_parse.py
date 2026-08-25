@@ -150,6 +150,32 @@ class TestLoadPages(unittest.TestCase):
         self.assertIsInstance(p["tags"], list)
         self.assertIsInstance(p["sources"], list)
 
+    def test_container_where_a_scalar_belongs_does_not_raise(self):
+        # The mirror of the case above: `title:` followed by an indented
+        # "k: v" parses to a dict and `status:` followed by a block list
+        # parses to a list, because the mini-parser reads any empty-valued
+        # key as a block. Both must be coerced to "" here — a dict title
+        # reaching page["title"].lower() in the health checks, or a list
+        # status reaching Counter(p["status"]) in the stats, killed the
+        # whole build with a raw traceback.
+        lore = make_lore({
+            "Dict_Title.md": "---\ntype: concept\ntitle:\n  nested: value\n"
+                             "description:\n  - a\n  - b\ntags: [x]\n---\n\nbody\n",
+            "List_Status.md": "---\ntype: concept\ntitle: List Status\n"
+                              "status:\n  - draft\n  - stable\ndescription: d\ntags: [x]\n"
+                              "---\n\nbody\n",
+        })
+        dict_title, list_status = load_pages(lore)
+        # The fallbacks still apply to a coerced-empty value exactly as they
+        # do to an absent key: the filename stem, and "stable".
+        self.assertEqual(dict_title["title"], "Dict Title")
+        self.assertEqual(dict_title["description"], "")
+        self.assertEqual(list_status["title"], "List Status")
+        self.assertEqual(list_status["status"], "stable")
+        for page in (dict_title, list_status):
+            for field in ("title", "type", "status", "description"):
+                self.assertIsInstance(page[field], str)
+
 
 class TestParseIndex(unittest.TestCase):
     def _lore(self, index_text, pages=None):

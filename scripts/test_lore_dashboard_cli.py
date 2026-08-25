@@ -105,6 +105,44 @@ class TestBuildPayload(unittest.TestCase):
         page = build_payload(lore, lore, TODAY)["pages"][0]
         self.assertNotIn("fields", page)
 
+    def test_a_container_typed_frontmatter_scalar_is_reported_not_crashed(self):
+        # End-to-end mirror of parse's container-where-a-scalar-belongs case:
+        # one hand-written page whose `title:`/`description:` are indented
+        # blocks (dict / list) and one whose `status:` is a block list. Before
+        # the coercion these reached health() and statistics() as containers
+        # and took the whole build down — AttributeError: 'dict' object has no
+        # attribute 'lower' from page["title"].lower(), and TypeError:
+        # unhashable type: 'list' from Counter(p["status"] for p in pages).
+        # One bad page must degrade to a reported offender, never a traceback.
+        lore = build_lore({
+            "Dict_Title.md": "---\ntype: concept\ntitle:\n  nested: value\n"
+                             "description:\n  - a\n  - b\ntags: [x]\n---\n\nbody\n",
+            "List_Status.md": "---\ntype: concept\ntitle: List Status\n"
+                              "status:\n  - draft\n  - stable\ndescription: d\ntags: [x]\n"
+                              "---\n\nbody\n",
+        })
+        code, _ = run_main([str(lore)])
+        self.assertEqual(code, 0)
+        payload = payload_from((lore / "dashboard.html").read_text())
+        pages = {p["id"]: p for p in payload["pages"]}
+        self.assertEqual(pages["Dict_Title"]["title"], "Dict Title")   # stem fallback survives
+        self.assertEqual(pages["Dict_Title"]["description"], "")
+        self.assertEqual(pages["List_Status"]["status"], "stable")
+        # Both pages surface in the health report instead of killing the run.
+        # A coerced-empty title/status is indistinguishable from an absent one
+        # and takes the same silent fallback, so what is actually reported is
+        # the rest of each page's schema — including, for Dict_Title, the
+        # description the coercion emptied.
+        offenders = {}
+        for dimension in payload["health"]["dimensions"]:
+            for check in dimension["checks"]:
+                for offender in check["offenders"]:
+                    offenders.setdefault(offender["ref"], []).append(offender["detail"])
+        self.assertIn("Dict_Title", offenders)
+        self.assertIn("List_Status", offenders)
+        self.assertTrue(any("description missing" in d for d in offenders["Dict_Title"]),
+                        offenders["Dict_Title"])
+
     def test_last_lint_days_is_filled_in_by_health_before_serialisation(self):
         # parse_log() alone leaves last_lint["days"] as None; build_payload
         # must call health() before the payload is returned so the Log tab
