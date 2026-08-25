@@ -255,5 +255,93 @@ class TestHookFailureModes(unittest.TestCase):
             os.chmod(lore, 0o700)
 
 
+class TestIndexGuard(unittest.TestCase):
+    def test_write_to_index_md_in_a_lore_is_denied_and_names_the_script(self):
+        lore = make_lore()
+        proc = run_hook(hook_input("Write", {"file_path": str(lore / "index.md"), "content": "x"}))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(decision(proc), "deny")
+        reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("lore_index.py", reason)
+        self.assertIn("group:", reason)
+
+    def test_edit_of_a_group_file_is_denied(self):
+        lore = make_lore()
+        (lore / "index").mkdir()
+        proc = run_hook(hook_input("Edit", {"file_path": str(lore / "index" / "Hardware.md"),
+                                            "old_string": "a", "new_string": "b"}))
+        self.assertEqual(decision(proc), "deny")
+
+    def test_index_md_is_denied_even_before_it_exists(self):
+        lore = make_lore()
+        (lore / "index.md").unlink()                      # init must go through the script
+        proc = run_hook(hook_input("Write", {"file_path": str(lore / "index.md"), "content": "x"}))
+        self.assertEqual(decision(proc), "deny")
+
+    def test_read_of_index_md_has_no_opinion(self):
+        lore = make_lore()
+        proc = run_hook(hook_input("Read", {"file_path": str(lore / "index.md")}))
+        self.assertIsNone(decision(proc))
+
+    def test_index_md_outside_a_lore_has_no_opinion(self):
+        root = Path(tempfile.mkdtemp())
+        proc = run_hook(hook_input("Write", {"file_path": str(root / "index.md"), "content": "x"}))
+        self.assertIsNone(decision(proc))
+
+    def test_parent_without_raw_or_claude_md_is_not_a_lore_for_this_rule(self):
+        for missing in ("raw", "CLAUDE.md"):
+            lore = make_lore()
+            target = lore / missing
+            target.rmdir() if target.is_dir() else target.unlink()
+            proc = run_hook(hook_input("Write", {"file_path": str(lore / "index.md"), "content": "x"}))
+            self.assertIsNone(decision(proc), missing)
+
+    def test_wiki_page_named_index_is_not_the_index(self):
+        lore = make_lore()
+        proc = run_hook(hook_input("Write", {"file_path": str(lore / "wiki" / "index.md"), "content": "x"}))
+        self.assertIsNone(decision(proc))
+
+
+class TestIndexGuardAdversarial(unittest.TestCase):
+    """Boundary cases beyond the brief: nested paths, name collisions with
+    "index", relative paths, and Read on both targets."""
+
+    def test_file_nested_deeper_than_one_level_under_index_is_not_covered(self):
+        # The rule covers files directly under index/, not arbitrarily deep.
+        lore = make_lore()
+        nested = lore / "index" / "sub"
+        nested.mkdir(parents=True)
+        proc = run_hook(hook_input("Write", {"file_path": str(nested / "File.md"), "content": "x"}))
+        self.assertIsNone(decision(proc))
+
+    def test_group_file_literally_named_index_md_is_still_denied(self):
+        # A page with `group: index` writes index/index.md — a file directly
+        # under index/ that happens to share the reserved top-level filename.
+        # It must be read as "directly under index/", not misread as if the
+        # index/ directory itself were the lore root one level up.
+        lore = make_lore()
+        (lore / "index").mkdir()
+        proc = run_hook(hook_input("Write", {"file_path": str(lore / "index" / "index.md"), "content": "x"}))
+        self.assertEqual(decision(proc), "deny")
+
+    def test_directory_literally_named_index_elsewhere_in_the_tree_is_not_the_index_dir(self):
+        lore = make_lore()
+        nested = lore / "wiki" / "notes" / "index"
+        nested.mkdir(parents=True)
+        proc = run_hook(hook_input("Write", {"file_path": str(nested / "Thing.md"), "content": "x"}))
+        self.assertIsNone(decision(proc))
+
+    def test_relative_index_path_is_resolved_against_cwd(self):
+        lore = make_lore()
+        proc = run_hook(hook_input("Write", {"file_path": "index.md", "content": "x"}, cwd=str(lore)))
+        self.assertEqual(decision(proc), "deny")
+
+    def test_read_of_a_group_file_has_no_opinion(self):
+        lore = make_lore()
+        (lore / "index").mkdir()
+        proc = run_hook(hook_input("Read", {"file_path": str(lore / "index" / "Hardware.md")}))
+        self.assertIsNone(decision(proc))
+
+
 if __name__ == "__main__":
     unittest.main()

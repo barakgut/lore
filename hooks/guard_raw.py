@@ -10,6 +10,12 @@ is none of our business. Two rules:
 2. Any matched tool, Read included, targeting a self-describing lore's
    <lore>/dashboard.html is denied — it's a generated, human-only view;
    read index.md, wiki/, and log.md instead.
+3. Edit/Write/MultiEdit/NotebookEdit targeting <lore>/index.md or a file
+   directly under <lore>/index/ are denied — the index is generated from
+   wiki/ frontmatter by scripts/lore_index.py; set group:/description: in
+   the page and re-run the script. For this rule a lore is a directory
+   holding wiki/, CLAUDE.md, and raw/ — index.md itself is not required,
+   because the denied write may be the one that would create it.
 
 On a match, print a PreToolUse deny decision; otherwise print nothing (no
 opinion), so the normal permission flow continues. Never exit non-zero: a
@@ -26,6 +32,8 @@ import sys
 
 DASHBOARD = "dashboard.html"
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+INDEX_FILE = "index.md"
+INDEX_DIR = "index"
 
 
 def lore_root_for(path):
@@ -55,6 +63,36 @@ def lore_root_of(path):
         and os.path.isfile(os.path.join(root, "CLAUDE.md"))
     ):
         return root
+    return None
+
+
+def lore_root_for_index(path):
+    """Return the lore root if `path` is <lore>/index.md or a file directly
+    under <lore>/index/, else None.
+
+    The "directly under index/" reading is tried first. This matters for two
+    collisions between the fixed "index" group-subdirectory name and the
+    reserved "index.md" filename: a lore root literally named "index", and a
+    group file that resolves to index/index.md (a page with `group: index`).
+    Each reading is only accepted once the candidate root itself looks like
+    a lore, so whichever reading actually holds is the one used.
+    """
+    def is_lore(root):
+        return (
+            os.path.isdir(os.path.join(root, "wiki"))
+            and os.path.isfile(os.path.join(root, "CLAUDE.md"))
+            and os.path.isdir(os.path.join(root, "raw"))
+        )
+
+    parent = os.path.dirname(path)
+    if os.path.basename(parent) == INDEX_DIR:
+        root = os.path.dirname(parent)
+        if is_lore(root):
+            return root
+    if os.path.basename(path) == INDEX_FILE:
+        root = parent
+        if is_lore(root):
+            return root
     return None
 
 
@@ -93,6 +131,12 @@ def main():
                      "wiki/ and log.md instead.")
                 return
         if tool in WRITE_TOOLS:
+            root = lore_root_for_index(target)
+            if root:
+                deny(f"{target} is {root}'s generated index — never hand-edited. "
+                     "Set group:/description: in the page's frontmatter and run "
+                     "scripts/lore_index.py instead.")
+                return
             root = lore_root_for(target)
             if root:
                 deny(f"{target} is inside {root}/raw/ — raw/ is immutable; "
