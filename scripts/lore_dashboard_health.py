@@ -5,6 +5,8 @@ Only checks a program can decide are computed. The judgment-only lint checks
 (active contradiction cross-check, footnote discipline judgment, missing
 concept pages, missing cross-references, knowledge gaps, discard candidates)
 are never scored — the dashboard shows the last lint entry's counts instead.
+Index drift is computed by importing scripts/lore_index.py; when that import
+fails the check is reported as unavailable and scores clean.
 """
 import math
 import re
@@ -69,6 +71,10 @@ def _integrity(pages, index, graph):
         buckets.setdefault(NORMALISE_RE.sub("", page["title"].lower()), []).append(page)
     duplicates = [_page_offender(p, f"title collides with {len(group) - 1} other page(s)")
                   for group in buckets.values() if len(group) > 1 for p in group]
+    drift = index.get("drift")
+    drift_label = "Index drift" if drift is not None else "Index drift (lore_index.py unavailable)"
+    drift_offenders = [{"ref": rel, "kind": "index", "detail": "differs from a fresh lore_index.py render"}
+                       for rel in (drift or [])]
     return [
         _check("orphans", "Orphan pages",
                [{"ref": i, "kind": "page", "detail": "no line in index.md"} for i in index["orphans"]],
@@ -83,6 +89,7 @@ def _integrity(pages, index, graph):
                [{"ref": i, "kind": "page", "detail": "index line is outside ## Deprecated"}
                 for i in index["misplaced_deprecated"]],
                total),
+        _check("index_drift", drift_label, drift_offenders, max(len(drift_offenders), 1)),
     ]
 
 
@@ -177,6 +184,8 @@ def _issues(pages, index, log, today):
     contradictions = [_page_offender(p, f"{p['contradictions']} contradiction marker(s)")
                       for p in pages if p["contradictions"]]
     drafts = [_page_offender(p, "status: draft") for p in pages if p["status"] == "draft"]
+    ungrouped = [_page_offender(p, "no group: in frontmatter")
+                 for p in pages if p["status"] != "deprecated" and not p.get("group")]
     over_cap = [{"ref": e["title"], "kind": "index", "detail": f"{e['chars']} chars (cap <{INDEX_ENTRY_CAP})"}
                 for e in index["over_cap"]]
     oversize = index["line_count"] > INDEX_LINE_TARGET
@@ -192,6 +201,7 @@ def _issues(pages, index, log, today):
     return [
         _check("contradictions", "Unresolved contradictions", contradictions, total),
         _check("drafts", "Draft pages", drafts, total),
+        _check("ungrouped_pages", "Pages without a group", ungrouped, total),
         _check("index_entry_cap", "Index entries over the char cap", over_cap,
                max(index["entry_count"], 1)),
         _check("index_size", "Index size",
