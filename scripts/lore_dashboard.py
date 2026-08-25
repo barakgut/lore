@@ -157,9 +157,20 @@ def main(argv=None):
         sys.exit(2)
 
     out_path = Path(args.output).expanduser().resolve() if args.output else lore / DEFAULT_OUTPUT
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # An -o path whose parent is missing, unwritable, or not a directory is a
+    # bad argument like any other: report it the way every other failure here
+    # is reported, never as a traceback.
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(f"error: cannot create {out_path.parent}: {error}", file=sys.stderr)
+        sys.exit(2)
     payload = build_payload(lore, out_path.parent, date.today())
-    out_path.write_text(build_html(payload), encoding="utf-8")
+    try:
+        out_path.write_text(build_html(payload), encoding="utf-8")
+    except OSError as error:
+        print(f"error: cannot write {out_path}: {error}", file=sys.stderr)
+        sys.exit(2)
     ensure_ignored(lore, out_path)
 
     counts = payload["meta"]["counts"]

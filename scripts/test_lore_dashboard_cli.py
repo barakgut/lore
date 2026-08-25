@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lore_dashboard import build_payload, ensure_ignored, git_info, link_prefixes, main
+from lore_dashboard_parse import load_pages, parse_index
 from test_lore_dashboard_health import build_lore, page_file
 
 TODAY = date(2026, 8, 24)
@@ -117,12 +118,22 @@ class TestBuildPayload(unittest.TestCase):
         self.assertIsInstance(payload["health"]["score"], int)
         self.assertIn("pages_by_type", payload["stats"])
 
-    def test_pages_do_not_leak_the_internal_fields_scratch_key(self):
-        # Controller decision: `fields` (raw frontmatter) is a scratch key the
-        # health checks need; it must never reach the serialised payload.
+    def test_pages_do_not_leak_the_internal_scratch_keys(self):
+        # Controller decision: `fields` (raw frontmatter) and
+        # `index_deprecated_section` (stamped on by parse_index, and only for
+        # a page that actually has a line in index.md) are scratch keys the
+        # health checks need; neither may reach the serialised payload.
+        # Both are asserted present on the freshly parsed record first, so
+        # the assertions below can only pass because build_payload strips
+        # them — not because the fixture never grew them.
         lore = build_lore({"A.md": page_file("A")})
+        parsed = load_pages(lore)
+        parse_index(lore, parsed)
+        self.assertIn("fields", parsed[0])
+        self.assertIn("index_deprecated_section", parsed[0])
         page = build_payload(lore, lore, TODAY)["pages"][0]
         self.assertNotIn("fields", page)
+        self.assertNotIn("index_deprecated_section", page)
 
     def test_a_container_typed_frontmatter_scalar_is_reported_not_crashed(self):
         # End-to-end mirror of parse's container-where-a-scalar-belongs case:
@@ -294,6 +305,34 @@ class TestMain(unittest.TestCase):
         self.assertIn("is not a lore", err.getvalue())
         self.assertIn("needs wiki/ and index.md", err.getvalue())
 
+    def test_an_output_path_whose_parent_cannot_be_created_exits_with_a_message(self):
+        # A regular file standing where -o's parent directory has to be:
+        # mkdir raises NotADirectoryError, which used to reach the terminal
+        # as a bare traceback while every other failure printed "error: …".
+        # Chosen over a chmod-000 directory because it fails the same way
+        # whatever the user's privileges are.
+        lore = build_lore({"A.md": page_file("A")})
+        blocker = Path(tempfile.mkdtemp()) / "not-a-dir"
+        blocker.write_text("i am a file")
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as caught:
+            with contextlib.redirect_stderr(err):
+                main([str(lore), "-o", str(blocker / "sub" / "dash.html")])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("error: cannot create", err.getvalue())
+
+    def test_an_unwritable_output_path_exits_with_a_message(self):
+        # -o pointing at an existing directory: the parent is fine, the write
+        # itself is what fails (IsADirectoryError).
+        lore = build_lore({"A.md": page_file("A")})
+        target = Path(tempfile.mkdtemp())
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as caught:
+            with contextlib.redirect_stderr(err):
+                main([str(lore), "-o", str(target)])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("error: cannot write", err.getvalue())
+
     def test_too_old_python_exits_with_code_1_and_a_message_on_stderr(self):
         lore = build_lore({"A.md": page_file("A")})
         err = io.StringIO()
@@ -305,6 +344,12 @@ class TestMain(unittest.TestCase):
         self.assertIn("python 3.10+ required", err.getvalue())
 
     def test_the_written_page_is_self_contained_and_carries_the_payload(self):
+        # Same invariant as TestBuildHtml.test_output_is_self_contained, and
+        # the same caveat: it is about assets (no CDN, no web font, no remote
+        # resource), not about payload text. This fixture's lore deliberately
+        # contains no https:// link of its own — a lore that did would put
+        # one in the page legitimately, and the fix would be to narrow this
+        # check, never to strip the user's URLs.
         lore = build_lore({"A.md": page_file("A")})
         run_main([str(lore)])
         page = (lore / "dashboard.html").read_text()

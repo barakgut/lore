@@ -65,6 +65,16 @@ class TestBuildHtml(unittest.TestCase):
 
     def test_output_is_self_contained(self):
         page = build_html(PAYLOAD)
+        # This invariant is about ASSETS: no CDN script, no web font, no
+        # remote resource of any kind — the page must render with the network
+        # switched off. It is NOT about the payload text. A lore whose page
+        # body, description or sources[] contains an ordinary https:// link
+        # legitimately produces a page containing "https://", and stripping
+        # those would be destroying the user's own content, not fixing a
+        # self-containment leak. PAYLOAD above deliberately carries no such
+        # link so the blunt substring check below can stand in for the real
+        # rule; if a future payload needs one, narrow the check to the
+        # <head>/asset region rather than sanitising the data.
         # The SVG namespace identifier ("http://www.w3.org/2000/svg", required
         # by document.createElementNS in core.js's svgEl helper) is the one
         # "http://" string allowed anywhere in the build — it is an XML
