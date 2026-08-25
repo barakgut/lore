@@ -896,6 +896,60 @@ class TestGraphPureFunctions(unittest.TestCase):
             ["a", "b"],
         ])
 
+    def test_focus_node_is_exempt_from_hide_deprecated_but_its_neighbours_are_not(self):
+        # Regression: the page view's mini graph always calls initGraph
+        # with hideDeprecated defaulting to true and ships no controls to
+        # change it. Before this fix, visibleNodes applied hideDeprecated
+        # to the focus node exactly like everyone else, so a deprecated
+        # page's own "Neighbourhood" widget silently dropped its own
+        # subject node — and rendered as a bare empty array whenever the
+        # focused (deprecated) page's neighbours were deprecated too,
+        # which is a normal state for a real lore (deprecating a page
+        # usually comes with deprecating what it links to). The prior
+        # test above combines a focus with a deprecated *neighbour* but
+        # never with a deprecated *focus node* itself — exactly why this
+        # shipped — so this test targets that specific gap.
+        #
+        # Star graph: b (deprecated) is the focus, linked to a (stable),
+        # c (deprecated), and d (stable). hideDeprecated=true must keep b
+        # (it is the focus, exempt) and d/a (never deprecated), but still
+        # drop c (a deprecated node that is NOT the focus).
+        star_nodes = [
+            {"id": "a", "type": "concept", "status": "stable", "tags": []},
+            {"id": "b", "type": "source", "status": "deprecated", "tags": []},
+            {"id": "c", "type": "concept", "status": "deprecated", "tags": []},
+            {"id": "d", "type": "concept", "status": "stable", "tags": []},
+        ]
+        star_edges = [{"source": "b", "target": "a"}, {"source": "b", "target": "c"},
+                     {"source": "b", "target": "d"}]
+        star_state = {"hideDeprecated": True, "type": "", "status": "", "tag": "",
+                     "focus": "b", "hops": 1}
+
+        # p (deprecated) is the focus and its *only* neighbour q is also
+        # deprecated. Pre-fix this filtered to [] entirely (p excluded
+        # like any other deprecated node) — exactly the "renders
+        # completely empty" failure mode reported. Post-fix p alone must
+        # still render: q (not the focus) stays hidden, p (the focus)
+        # does not.
+        chain_nodes = [
+            {"id": "p", "type": "concept", "status": "deprecated", "tags": []},
+            {"id": "q", "type": "concept", "status": "deprecated", "tags": []},
+        ]
+        chain_edges = [{"source": "p", "target": "q"}]
+        chain_state = {"hideDeprecated": True, "type": "", "status": "", "tag": "",
+                       "focus": "p", "hops": 1}
+
+        results = self._call([
+            {"fn": "visibleNodes", "args": [star_nodes, star_edges, star_state]},
+            {"fn": "visibleNodes", "args": [chain_nodes, chain_edges, chain_state]},
+        ])
+        # a and d (never deprecated) plus b (the deprecated focus, exempt)
+        # survive; c (a deprecated non-focus neighbour) is dropped.
+        self.assertEqual(sorted(results[0]), ["a", "b", "d"])
+        # p (the deprecated focus) survives alone — never the empty list
+        # the pre-fix filter produced for this exact shape.
+        self.assertEqual(results[1], ["p"])
+
     def test_dimmed_matches_title_or_id_case_insensitively_empty_query_never_dims(self):
         node_a = {"title": "Concept A", "id": "concept-a"}
         node_b = {"title": "Foo", "id": "bar-id"}

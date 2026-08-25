@@ -80,11 +80,23 @@ function isolatedGridPosition(row) {           // labelled grid below the main c
   return { x: -300 + (row % 8) * 80, y: 340 + Math.floor(row / 8) * 40 };
 }
 
+// The focus node itself is exempt from the hideDeprecated filter (never
+// from the type/status/tag selects, and never its neighbours): the page
+// view's mini graph always focuses the page it is showing with
+// hideDeprecated defaulting to true and ships no controls to change it, so
+// a deprecated page's own "Neighbourhood" widget must not drop its own
+// subject — and must not render completely empty when its neighbours are
+// deprecated too, which is a normal state (deprecating a page usually
+// comes with deprecating what it linked to). The graph tab's focus mode
+// has the same problem — focusing a deprecated node with "hide deprecated"
+// checked would hide the very thing just focused — so one exemption here
+// covers both call sites.
 function visibleNodes(nodes, edges, state) {
   const inFocus = state.focus ? withinHops(state.focus, state.hops, edges) : null;
   return nodes.filter(node => {
     if (inFocus && !inFocus.has(node.id)) return false;
-    if (state.hideDeprecated && node.status === "deprecated") return false;
+    const isFocusNode = Boolean(state.focus) && node.id === state.focus;
+    if (state.hideDeprecated && node.status === "deprecated" && !isFocusNode) return false;
     if (state.type && node.type !== state.type) return false;
     if (state.status && node.status !== state.status) return false;
     if (state.tag && !(node.tags || []).includes(state.tag)) return false;
