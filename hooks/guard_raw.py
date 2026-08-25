@@ -3,7 +3,7 @@
 
 A lore self-describes: the directory containing raw/ (or dashboard.html) must
 hold index.md, wiki/, and CLAUDE.md. Any other raw/ directory or dashboard.html
-is none of our business. Two rules:
+is none of our business. Three rules:
 
 1. Edit/Write/MultiEdit/NotebookEdit targeting a path under a self-describing
    lore's raw/ are denied — originals are ground truth, distill into wiki/.
@@ -21,8 +21,8 @@ On a match, print a PreToolUse deny decision; otherwise print nothing (no
 opinion), so the normal permission flow continues. Never exit non-zero: a
 guard that crashes must not block unrelated tool calls.
 
-Not a hard security boundary: realpath() resolves symlinks before either
-basename check runs, so a symlinked raw/ directory, or a symlink named
+Not a hard security boundary: realpath() resolves symlinks before any of the
+three basename checks run, so a symlinked raw/ directory, or a symlink named
 dashboard.html pointing elsewhere, escapes detection; this is defense-in-depth
 over the skills' own instructions, and Bash is unhooked by design regardless.
 """
