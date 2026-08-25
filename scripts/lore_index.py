@@ -161,9 +161,13 @@ def group_filename(heading):
     return heading.replace(" ", "_").replace("/", "_") + ".md"
 
 
-def hub_line(heading, members):
+def hub_line(heading, members, filename=None):
     """`- [Group](index/Group.md) — <n> pages: <titles>` cut under the cap at a
     title boundary; `, …` marks the cut.
+
+    filename overrides the computed index/<Group>.md target — render_split
+    passes this when group_filename(heading) collided with an earlier
+    heading and this heading was written under a disambiguated name.
 
     The link target is never truncated. If the heading/filename alone leave
     no room even for a bare "…" under the cap, the full, uncut line is
@@ -171,8 +175,9 @@ def hub_line(heading, members):
     so there is nothing to gain from hiding them (same precedent as
     entry_line's pathological long-filename case).
     """
+    filename = filename or group_filename(heading)
     n = len(members)
-    base = f"- [{heading}](index/{group_filename(heading)}) — {n} page{'s' if n != 1 else ''}: "
+    base = f"- [{heading}](index/{filename}) — {n} page{'s' if n != 1 else ''}: "
     titles = [entry["title"] for entry in members]
     naive = base + ", ".join(titles)
     if len(base + "…") >= ENTRY_CAP:
@@ -190,18 +195,36 @@ def hub_line(heading, members):
 
 
 def render_split(entries):
-    """A hub index.md plus one index/<Group>.md per heading."""
+    """A hub index.md plus one index/<Group>.md per heading.
+
+    Two headings can map to the same group_filename() (e.g. "Power/Thermal"
+    and "Power Thermal" both become Power_Thermal.md). Losing a whole
+    group's page listing to a silent overwrite would violate "every page
+    stays reachable", so headings are claimed in order (group_entries'
+    order) and a later collision is disambiguated with a _2, _3, … suffix
+    before .md, with a WARN so the groups get renamed.
+    """
     files, warnings = {}, []
     hub = ["# Lore Index", MARKER, ""]
+    claimed = set()
     for heading, members in group_entries(entries):
-        hub.append(hub_line(heading, members))
+        filename = group_filename(heading)
+        if filename in claimed:
+            stem = filename[:-len(".md")]
+            n = 2
+            while f"{stem}_{n}.md" in claimed:
+                n += 1
+            filename = f"{stem}_{n}.md"
+            warnings.append(f'WARN: group filename collision; "{heading}" written as index/{filename}')
+        claimed.add(filename)
+        hub.append(hub_line(heading, members, filename))
         lines = [f"# {heading}", MARKER, ""]
         for entry in members:
             line, warning = entry_line(entry)
             lines.append(line)
             if warning:
                 warnings.append(warning)
-        files[f"index/{group_filename(heading)}"] = "\n".join(lines) + "\n"
+        files[f"index/{filename}"] = "\n".join(lines) + "\n"
     files["index.md"] = "\n".join(hub) + "\n"
     return files, warnings
 
@@ -226,14 +249,19 @@ def render(lore, split=None):
     return files, messages + warnings
 
 
-def write_files(lore, files):
-    """Write every rendered file; in split mode remove index/*.md files that
-    no longer correspond to a heading — the script owns that directory."""
+def write_files(lore, files, split=False):
+    """Write every rendered file. While split, the script owns index/
+    entirely: it (re)creates the directory and removes any index/*.md that
+    no longer corresponds to a heading — keyed off split explicitly, not
+    inferred from files, since a wiki/ that has emptied out renders zero
+    headings (files has no "index/" key at all) yet index/ must still be
+    cleared out and kept, not left with stale group files or deleted."""
     lore = Path(lore)
     for rel, text in files.items():
         (lore / rel).parent.mkdir(exist_ok=True)
         (lore / rel).write_text(text, encoding="utf-8")
-    if any(rel.startswith("index/") for rel in files):
+    if split:
+        (lore / "index").mkdir(exist_ok=True)
         for stale in (lore / "index").glob("*.md"):
             if f"index/{stale.name}" not in files:
                 stale.unlink()
@@ -295,9 +323,9 @@ def main(argv=None):
         return 1 if drift else 0
     if args.flat and (lore / "index").is_dir():
         shutil.rmtree(lore / "index")
-    split = True if args.split else False if args.flat else None
+    split = True if args.split else False if args.flat else (lore / "index").is_dir()
     files, messages = render(lore, split)
-    write_files(lore, files)
+    write_files(lore, files, split)
     for message in messages:
         print(message)
     return 0

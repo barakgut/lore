@@ -331,6 +331,39 @@ class TestSplitRender(unittest.TestCase):
                          f"# Hardware\n{MARKER}\n\n- [A](wiki/A.md) — about A\n")   # paths stay lore-relative
         self.assertEqual(warnings, [])
 
+    def test_hub_line_accepts_a_filename_override(self):
+        members = [{"file": "wiki/A.md", "title": "A", "hook": "", "group": "G", "deprecated": False}]
+        self.assertEqual(hub_line("G", members, "G_2.md"), "- [G](index/G_2.md) — 1 page: A")
+
+    def test_render_split_disambiguates_a_filename_collision(self):
+        # "Power/Thermal" and "Power Thermal" both group_filename() to
+        # Power_Thermal.md. Neither group's pages may be silently dropped:
+        # the second heading claimed (group_entries orders "Power Thermal"
+        # before "Power/Thermal" casefold) gets a _2 suffix, a WARN, and its
+        # own hub line pointing at the file it actually got.
+        lore = make_lore({"A.md": page("A", "Power/Thermal"), "B.md": page("B", "Power Thermal")})
+        entries, _ = load_entries(lore)
+        files, warnings = render_split(entries)
+        self.assertEqual(sorted(files), ["index.md", "index/Power_Thermal.md", "index/Power_Thermal_2.md"])
+        self.assertEqual(files["index/Power_Thermal.md"], f"# Power Thermal\n{MARKER}\n\n- [B](wiki/B.md) — about B\n")
+        self.assertEqual(files["index/Power_Thermal_2.md"], f"# Power/Thermal\n{MARKER}\n\n- [A](wiki/A.md) — about A\n")
+        hub = files["index.md"]
+        self.assertIn("- [Power Thermal](index/Power_Thermal.md) — 1 page: B", hub)
+        self.assertIn("- [Power/Thermal](index/Power_Thermal_2.md) — 1 page: A", hub)
+        self.assertEqual(warnings, ['WARN: group filename collision; "Power/Thermal" written as index/Power_Thermal_2.md'])
+
+    def test_render_split_disambiguates_a_three_way_filename_collision(self):
+        lore = make_lore({"A.md": page("A", "Power Thermal"), "B.md": page("B", "Power/Thermal"),
+                          "C.md": page("C", "Power_Thermal")})
+        entries, _ = load_entries(lore)
+        files, warnings = render_split(entries)
+        self.assertEqual(sorted(files),
+                         ["index.md", "index/Power_Thermal.md", "index/Power_Thermal_2.md", "index/Power_Thermal_3.md"])
+        self.assertEqual(warnings, [
+            'WARN: group filename collision; "Power/Thermal" written as index/Power_Thermal_2.md',
+            'WARN: group filename collision; "Power_Thermal" written as index/Power_Thermal_3.md',
+        ])
+
 
 class TestSplitCli(unittest.TestCase):
     def test_note_above_threshold_flat_still_written(self):
@@ -360,6 +393,23 @@ class TestSplitCli(unittest.TestCase):
         proc = run(lore)                                        # no flag: stays split
         self.assertEqual((proc.returncode, proc.stdout), (0, ""))
         self.assertEqual(sorted(p.name for p in (lore / "index").glob("*.md")), ["Hardware.md", "Thermal.md"])
+        self.assertEqual(check(lore), [])
+
+    def test_split_is_sticky_and_index_dir_survives_an_emptied_wiki(self):
+        # write_files must key its stale-index/*.md cleanup off split mode
+        # explicitly, not off whether the rendered files happen to include
+        # an "index/" entry — a wholly emptied wiki/ renders zero headings,
+        # so files is just {"index.md": ...}, yet index/ must still be
+        # cleared out (not left with a stale group file) and kept (not
+        # deleted — only --flat removes the directory itself).
+        lore = make_lore({"A.md": page("A", "Alpha")})
+        run(lore, "--split")
+        (lore / "wiki" / "A.md").unlink()
+        proc = run(lore)                                        # no flag: stays split
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+        self.assertTrue((lore / "index").is_dir())
+        self.assertEqual(list((lore / "index").glob("*.md")), [])
+        self.assertEqual((lore / "index.md").read_text(), f"# Lore Index\n{MARKER}\n\n")
         self.assertEqual(check(lore), [])
 
     def test_flat_flag_removes_index_dir(self):
