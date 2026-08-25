@@ -144,12 +144,18 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lore_index.py" "$LORE"
 the plugin root — the directory that holds `skills/` and `hooks/`.)
 
 - **When:** once per flow, right before the commit, at the end of every flow
-  that touches `wiki/`: init, ingest, lint, discard, answer promotion — plus
-  on sight of a lore whose `index.md` is missing (**Finding the lore**). A
+  that touches `wiki/`: init, ingest, lint, discard, answer promotion. A
   second run this section orders — `--seed-groups`, `--split` — is part of
   that one regeneration, not another one. Wherever any skill, or any flow in
   this one (see **Discard flow** above), says "regenerate the index", it means
   this section.
+- **Repair:** a lore found with its `index.md` missing (**Finding the lore**)
+  is regenerated on sight, at the start of the flow that found it. That
+  repair is not the end-of-flow run above — the flow still does its own
+  single run before its commit — and it is committed: with that flow's own
+  commit, or, when nothing else changed, alone as
+  `lint: regenerate missing index` (a repair is a lint fix, so **Git**'s
+  prefixes already cover it).
 - **Relay** every `WARN:` and `NOTE:` line the script prints in your report.
   `WARN: no frontmatter wiki/X.md` and
   `WARN: over-cap wiki/X.md (<n> chars)` are both fixed in the page — add the
@@ -163,9 +169,11 @@ the plugin root — the directory that holds `skills/` and `hooks/`.)
   (stderr, exit 1): the lore predates v0.5. Run the script once more with
   `--seed-groups` — it stamps `group:` from the old headings onto each page
   the old index listed under a real topic heading, then regenerates. Pages the
-  old index listed under `## Ungrouped` or `## Deprecated`, and pages it never
-  listed at all, are not stamped and land under `## Ungrouped`. Report which
-  pages were stamped, and continue.
+  old index listed under `## Ungrouped`, and pages it never listed at all, are
+  not stamped and land under `## Ungrouped`. Pages it listed under
+  `## Deprecated` are not stamped either, and keep rendering under
+  `## Deprecated` — their own `status: deprecated` is what puts them there.
+  Report which pages were stamped, and continue.
 - **`NOTE: <n> entries > 200; run with --split to split the index`**: the
   index is past its size target. The refusal marker is a line of its own in
   the lore's `CLAUDE.md` `## Layout` section that **begins**
