@@ -10,9 +10,11 @@ SHELL = "shell.html"
 CSS_ASSETS = ["app.css"]
 # Load order matters: core.js defines the helpers every later file calls,
 # md.js and search.js must load before views.js (the page view calls
-# renderMarkdown, the search view calls searchPages/highlight), and app.js
-# runs last because it reads the finished view registry.
-JS_ASSETS = ["core.js", "md.js", "search.js", "views.js", "app.js"]
+# renderMarkdown, the search view calls searchPages/highlight), graph.js
+# must load before views.js too (the graph tab and the page view's mini
+# graph call initGraph), and app.js runs last because it reads the finished
+# view registry.
+JS_ASSETS = ["core.js", "md.js", "search.js", "graph.js", "views.js", "app.js"]
 PLACEHOLDER_RE = re.compile(r"__(TITLE|STYLE|SCRIPT|DATA)__")
 
 

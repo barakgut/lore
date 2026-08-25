@@ -99,7 +99,11 @@ function renderPage(id) {
       ? el("ul", { class: "linklist" }, issues.map(issue =>
           el("li", { text: issue.dimension + " · " + issue.check + " — " + issue.detail })))
       : el("p", { class: "empty", text: "No mechanical issues on this page." }),
-    el("div", { id: "mini-graph" }),
+    (() => {
+      const host = el("div", { id: "mini-graph", class: "graph-host mini" });
+      requestAnimationFrame(() => initGraph(host, { focus: page.id, hops: 1, height: 220 }));
+      return el("div", {}, [el("h3", { text: "Neighbourhood" }), host]);
+    })(),
   ]);
 }
 
@@ -436,3 +440,46 @@ function renderInbox() {
 }
 
 defineView("inbox", "Inbox", renderInbox);
+
+function renderGraph() {
+  const host = el("div", { class: "graph-host" });
+  const types = [...new Set(LORE.graph.nodes.map(n => n.type))].sort();
+  const statuses = [...new Set(LORE.graph.nodes.map(n => n.status).filter(Boolean))].sort();
+  const tags = [...new Set(LORE.graph.nodes.flatMap(n => n.tags || []))].sort();
+  let graph = null;
+  const set = (key, value) => { if (graph) { graph.state[key] = value; graph.apply(); } };
+  const controls = el("div", { class: "filters graph-controls" }, [
+    el("select", { onchange: e => set("type", e.target.value) },
+      [el("option", { value: "", text: "type: all" })].concat(
+        types.map(t => el("option", { value: t, text: t })))),
+    el("select", { onchange: e => set("status", e.target.value) },
+      [el("option", { value: "", text: "status: all" })].concat(
+        statuses.map(s => el("option", { value: s, text: s })))),
+    el("select", { onchange: e => set("tag", e.target.value) },
+      [el("option", { value: "", text: "tag: all" })].concat(
+        tags.map(t => el("option", { value: t, text: t })))),
+    el("label", {}, [
+      el("input", { type: "checkbox", checked: true,
+                    onchange: e => set("hideDeprecated", e.target.checked) }),
+      " hide deprecated"]),
+    el("input", { type: "search", placeholder: "dim non-matching",
+                  oninput: e => set("query", e.target.value) }),
+    el("label", {}, [
+      el("input", { type: "checkbox", onchange: e => set("focusMode", e.target.checked) }),
+      " focus on click"]),
+    el("select", { onchange: e => set("hops", Number(e.target.value)) },
+      [1, 2, 3].map(n => el("option", { value: n, text: n + " hop(s)" }))),
+    el("button", { type: "button", onclick: () => { set("focus", null); } }, "clear focus"),
+  ]);
+  requestAnimationFrame(() => {
+    graph = initGraph(host, { height: Math.max(420, window.innerHeight - 220) });
+  });
+  return el("section", { class: "graph-section" }, [
+    controls,
+    host,
+    el("p", { class: "muted", text: "drag nodes · drag background to pan · wheel to zoom · "
+                                    + "click a node to open its page" }),
+  ]);
+}
+
+defineView("graph", "Graph", renderGraph);

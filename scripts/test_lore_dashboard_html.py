@@ -767,6 +767,359 @@ class TestOffenderRendering(unittest.TestCase):
                                 "children": []})
 
 
+class TestGraphAsset(unittest.TestCase):
+    def test_graph_asset_loads_before_views(self):
+        self.assertLess(JS_ASSETS.index("graph.js"), JS_ASSETS.index("views.js"))
+
+    def test_graph_view_is_registered(self):
+        self.assertIn('defineView("graph"', (ASSETS_DIR / "views.js").read_text(encoding="utf-8"))
+
+    def test_the_old_standalone_graph_script_is_gone(self):
+        scripts = ASSETS_DIR.parent
+        self.assertFalse((scripts / "lore_graph.py").exists())
+        self.assertFalse((scripts / "test_lore_graph.py").exists())
+
+    def test_graph_uses_deterministic_layout_seeding(self):
+        source = (ASSETS_DIR / "graph.js").read_text(encoding="utf-8")
+        self.assertNotIn("Math.random", source)     # golden-angle spiral, stable across runs
+
+
+# graph.js separates the parts of the graph that are pure functions of the
+# payload (node filtering, the focus/hops subgraph, the radius formula, the
+# isolated/clustered split, and the deterministic layout seed) from the
+# canvas drawing/force-simulation that only means anything in a real
+# browser. This runner loads graph.js alone — none of its top-level pure
+# helpers touch `document`/`window`/`LORE` until called, so no DOM stub is
+# needed at all — and calls the real functions by name via a small generic
+# dispatch table, exactly the "actually run it" style BAR_RUNNER_JS and
+# SEARCH_RUNNER_JS already use above. A Set result is returned sorted (order
+# is not part of the contract); a Map result as [[key, value], ...] entries;
+# an array of node objects as just their ids (what the hand-derived
+# expectations below care about, not object identity).
+GRAPH_PURE_RUNNER_JS = """
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[2], "utf8");
+(0, eval)(src);
+const spec = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const fns = { radiusOf, withinHops, visibleNodes, isDimmed, isolatedIdSet,
+              idRanks, seedPosition, isolatedGridPosition };
+function normalise(result) {
+  if (result instanceof Set) return [...result].sort();
+  if (result instanceof Map) return [...result.entries()];
+  if (Array.isArray(result)) {
+    return result.map(item => (item && item.id !== undefined) ? item.id : item);
+  }
+  return result;
+}
+const out = spec.calls.map(call => normalise(fns[call.fn](...call.args)));
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed — graph helper check skipped")
+class TestGraphPureFunctions(unittest.TestCase):
+    def _call(self, calls):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_graph_pure.js"
+            spec_path = Path(tmp) / "calls.json"
+            runner.write_text(GRAPH_PURE_RUNNER_JS, encoding="utf-8")
+            spec_path.write_text(json.dumps({"calls": calls}), encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "graph.js"), str(spec_path)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_radius_grows_with_inbound_degree_capped_at_8_plus_a_base_of_6(self):
+        # Contract (both the Interfaces section and the controller's
+        # decisions doc): "6 + min(node.in, 8)". The brief's own Step 3
+        # sample wrote `5 + Math.min(node.in || 0, 8)` — a base of 5, not
+        # 6 — which disagrees with the stated contract; the contract wins.
+        # This case set discriminates 5-vs-6 at every boundary: in=0 (base
+        # only), in=3 (under the cap), in=8 (exactly at the cap), in=20
+        # (over the cap, must clamp), and a node with no `in` field at all
+        # (the `|| 0` fallback).
+        nodes = [{"in": 0}, {"in": 3}, {"in": 8}, {"in": 20}, {}]
+        radii = self._call([{"fn": "radiusOf", "args": [n]} for n in nodes])
+        self.assertEqual(radii, [6, 9, 14, 14, 6])
+
+    def test_hops_1_to_3_expand_the_focus_subgraph_by_exactly_that_many_steps(self):
+        # Path graph A-B-C-D-E. From A: 1 hop reaches B, 2 hops reach C,
+        # 3 hops reach D (never E — that would take 4). From C (mid-chain),
+        # 1 hop reaches both neighbours B and D. A node absent from every
+        # edge returns just itself, not a crash.
+        edges = [{"source": "A", "target": "B"}, {"source": "B", "target": "C"},
+                 {"source": "C", "target": "D"}, {"source": "D", "target": "E"}]
+        cases = [("A", 1), ("A", 2), ("A", 3), ("C", 1), ("Z", 2)]
+        results = self._call([{"fn": "withinHops", "args": [start, hops, edges]}
+                               for start, hops in cases])
+        self.assertEqual(results, [
+            ["A", "B"],
+            ["A", "B", "C"],
+            ["A", "B", "C", "D"],
+            ["B", "C", "D"],
+            ["Z"],
+        ])
+
+    def test_hide_deprecated_checked_hides_deprecated_nodes_not_the_opposite(self):
+        # Pins the exact polarity the controller flagged as a likely error:
+        # state.hideDeprecated: true (the checkbox's default, checked) must
+        # HIDE the one deprecated node ("b"), not show only deprecated
+        # nodes and hide everything else.
+        nodes = [
+            {"id": "a", "type": "concept", "status": "stable", "tags": ["x"]},
+            {"id": "b", "type": "source", "status": "deprecated", "tags": ["y"]},
+            {"id": "c", "type": "concept", "status": "draft", "tags": []},
+        ]
+        edges = [{"source": "a", "target": "b"}]
+
+        def visible(**state):
+            full_state = {"hideDeprecated": False, "type": "", "status": "", "tag": "",
+                          "focus": None, "hops": 1}
+            full_state.update(state)
+            return {"fn": "visibleNodes", "args": [nodes, edges, full_state]}
+
+        results = self._call([
+            visible(hideDeprecated=True),                 # -> a, c (b hidden)
+            visible(hideDeprecated=False),                # -> a, b, c (nothing hidden)
+            visible(type="concept"),                       # -> a, c
+            visible(status="deprecated"),                   # -> b
+            visible(tag="y"),                               # -> b
+            visible(focus="a", hops=1),                     # -> a, b (a's 1-hop neighbour)
+        ])
+        self.assertEqual([sorted(r) for r in results], [
+            ["a", "c"],
+            ["a", "b", "c"],
+            ["a", "c"],
+            ["b"],
+            ["b"],
+            ["a", "b"],
+        ])
+
+    def test_dimmed_matches_title_or_id_case_insensitively_empty_query_never_dims(self):
+        node_a = {"title": "Concept A", "id": "concept-a"}
+        node_b = {"title": "Foo", "id": "bar-id"}
+        results = self._call([
+            {"fn": "isDimmed", "args": [node_a, ""]},
+            {"fn": "isDimmed", "args": [node_a, "concept"]},
+            {"fn": "isDimmed", "args": [node_a, "ZZZ"]},
+            {"fn": "isDimmed", "args": [node_b, "bar"]},
+        ])
+        self.assertEqual(results, [False, False, True, False])
+
+    def test_isolated_id_set_is_every_node_untouched_by_any_edge(self):
+        results = self._call([
+            {"fn": "isolatedIdSet",
+             "args": [[{"id": "a"}, {"id": "b"}, {"id": "c"}], [{"source": "a", "target": "b"}]]},
+            {"fn": "isolatedIdSet", "args": [[{"id": "x"}, {"id": "y"}], []]},
+        ])
+        self.assertEqual(results, [["c"], ["x", "y"]])
+
+    def test_layout_seed_is_keyed_by_sorted_id_rank_not_array_position(self):
+        # Nodes deliberately supplied out of alphabetical order. If the seed
+        # were keyed by array index (i from a forEach), ranks would come
+        # back [0, 1, 2] in this input order — order-dependent, and only
+        # "stable" because a caller happens to pass ids pre-sorted. Keyed by
+        # id instead, the same three ids always rank the same way (alpha=0,
+        # bravo=1, charlie=2) no matter what order they arrive in.
+        nodes = [{"id": "charlie"}, {"id": "alpha"}, {"id": "bravo"}]
+        [ranks] = self._call([{"fn": "idRanks", "args": [nodes]}])
+        by_id = dict(ranks)
+        self.assertEqual(by_id, {"alpha": 0, "bravo": 1, "charlie": 2})
+
+    def test_seed_position_is_a_deterministic_pure_function_of_rank(self):
+        # rank 0 lands at angle 0 (cos=1, sin=0), radius 24*sqrt(1) — exact,
+        # no floating-point ambiguity. Calling the same rank twice in one
+        # process additionally proves determinism directly (same input,
+        # same output) without hand-deriving a transcendental cos/sin
+        # decimal for a non-zero rank.
+        results = self._call([
+            {"fn": "seedPosition", "args": [0]},
+            {"fn": "seedPosition", "args": [3]},
+            {"fn": "seedPosition", "args": [3]},
+        ])
+        seed_zero, seed_three_a, seed_three_b = results
+        self.assertEqual(seed_zero, {"x": 24, "y": 0})
+        self.assertEqual(seed_three_a, seed_three_b)
+
+    def test_isolated_grid_wraps_at_8_columns_below_the_main_cluster(self):
+        results = self._call([{"fn": "isolatedGridPosition", "args": [row]}
+                               for row in (0, 7, 8, 9)])
+        self.assertEqual(results, [
+            {"x": -300, "y": 340},
+            {"x": 260, "y": 340},
+            {"x": -300, "y": 380},   # wraps to a new row after column 8
+            {"x": -220, "y": 380},
+        ])
+
+
+# graph.js's destroy lifecycle is the other half of the leak the controller
+# flagged: the graph tab and the page view's mini graph both start a
+# requestAnimationFrame loop and a window "resize"/"mouseup" listener, and
+# the router (app.js) replaces the view's whole DOM subtree on every
+# navigation with no per-view unmount hook to call destroy() from. So
+# initGraph()'s own loop checks, once per frame, whether its host is still
+# attached to the document — the same thing route()'s clear(main) does to
+# every torn-down view's markup — and runs the exact same cleanup destroy()
+# does. This runner proves both paths: an explicit destroy() call while
+# still connected (scenario 1) and a host silently going away with no
+# destroy() call at all (scenario 2, the actual navigation-away case).
+# requestAnimationFrame is stubbed to record callbacks without invoking them
+# — the test fires frames one at a time under its own control, so it can
+# observe whether a given frame rescheduled another one or not.
+GRAPH_LIFECYCLE_RUNNER_JS = """
+const fs = require("fs");
+
+function makeNode(tag) {
+  return {
+    tag, style: {}, children: [], listeners: {}, isConnected: true,
+    setAttribute() {},
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    removeEventListener(type, fn) {
+      if (!this.listeners[type]) return;
+      this.listeners[type] = this.listeners[type].filter(f => f !== fn);
+    },
+    append(...kids) { for (const k of kids) this.children.push(k); },
+    get firstChild() { return this.children[0] || null; },
+    removeChild(child) {
+      const i = this.children.indexOf(child);
+      if (i >= 0) this.children.splice(i, 1);
+      return child;
+    },
+    getBoundingClientRect() { return { left: 0, top: 0 }; },
+    getContext() { return ctxStub; },
+  };
+}
+
+// Every ctx.method(...) call and ctx.property = value assignment used by
+// graph.js's draw()/tick() is swallowed generically — painting itself is
+// exactly the part TestGraphPureFunctions above deliberately does not test.
+const ctxStub = new Proxy({}, {
+  get() { return function () {}; },
+  set() { return true; },
+});
+
+global.document = {
+  documentElement: {},
+  getElementById: (id) => (id === "lore-data" ? { textContent: JSON.stringify({ pages: [] }) }
+                                               : makeNode("div")),
+  createElement: (tag) => makeNode(tag),
+  createElementNS: (ns, tag) => makeNode(tag),
+  createTextNode: (text) => ({ nodeType: 3, text: String(text) }),
+};
+global.getComputedStyle = () => ({ getPropertyValue: () => "" });
+
+const winListeners = {};
+global.window = {
+  devicePixelRatio: 1,
+  addEventListener(type, fn) { (winListeners[type] = winListeners[type] || []).push(fn); },
+  removeEventListener(type, fn) {
+    if (!winListeners[type]) return;
+    winListeners[type] = winListeners[type].filter(f => f !== fn);
+  },
+};
+function countOf(type) { return (winListeners[type] || []).length; }
+
+let rafQueue = [];
+global.requestAnimationFrame = (cb) => { rafQueue.push(cb); return rafQueue.length; };
+function fireOneFrame() { const cb = rafQueue.shift(); if (cb) cb(); }
+
+const coreSrc = fs.readFileSync(process.argv[2], "utf8");
+const graphSrc = fs.readFileSync(process.argv[3], "utf8");
+(0, eval)(coreSrc + "\\n" + graphSrc);
+
+const sampleNodes = [
+  { id: "a", title: "A", type: "concept", status: "stable", tags: [], ghost: false, in: 1, out: 1 },
+  { id: "b", title: "B", type: "concept", status: "stable", tags: [], ghost: false, in: 1, out: 1 },
+];
+const sampleEdges = [{ source: "a", target: "b" }];
+
+// --- Scenario 1: a caller explicitly calls destroy() on a still-connected host ---
+const host1 = makeNode("div");
+const resizeBefore1 = countOf("resize"), mouseupBefore1 = countOf("mouseup");
+const graph1 = initGraph(host1, { nodes: sampleNodes, edges: sampleEdges, height: 100 });
+const resizeAfterCreate1 = countOf("resize") - resizeBefore1;
+const mouseupAfterCreate1 = countOf("mouseup") - mouseupBefore1;
+const hostChildrenAfterCreate1 = host1.children.length;
+
+const rafLenBeforeFrame1 = rafQueue.length;
+fireOneFrame();   // still connected: tick/draw, then reschedule
+const rescheduledWhileConnected1 = rafLenBeforeFrame1 > 0 && rafQueue.length === rafLenBeforeFrame1;
+
+graph1.destroy();
+const resizeAfterDestroy1 = countOf("resize") - resizeBefore1;
+const mouseupAfterDestroy1 = countOf("mouseup") - mouseupBefore1;
+const hostChildrenAfterDestroy1 = host1.children.length;
+
+const rafLenBeforePostDestroyFrame = rafQueue.length;
+fireOneFrame();   // the frame still queued when destroy() ran fires once more
+const queueEmptyAfterDestroyFrame1 = rafLenBeforePostDestroyFrame > 0 && rafQueue.length === 0;
+
+let destroyTwiceThrew = false;
+try { graph1.destroy(); } catch (e) { destroyTwiceThrew = true; }   // must be idempotent
+
+// --- Scenario 2: destroy() is never called; the host is simply detached,
+// exactly what route()'s clear(main) does on every navigation ---
+const host2 = makeNode("div");
+const resizeBefore2 = countOf("resize");
+initGraph(host2, { nodes: sampleNodes, edges: sampleEdges, height: 100 });
+const resizeAfterCreate2 = countOf("resize") - resizeBefore2;
+const rafLenAfterCreate2 = rafQueue.length;
+
+fireOneFrame();   // still connected: reschedules
+const rescheduledWhileConnected2 = rafLenAfterCreate2 > 0 && rafQueue.length === rafLenAfterCreate2;
+
+host2.isConnected = false;
+const rafLenBeforeDisconnectFrame = rafQueue.length;
+fireOneFrame();   // must self-stop here — nothing else ever calls destroy() on host2
+const resizeAfterSelfStop2 = countOf("resize") - resizeBefore2;
+const hostChildrenAfterSelfStop2 = host2.children.length;
+const queueEmptyAfterSelfStop2 = rafLenBeforeDisconnectFrame > 0 && rafQueue.length === 0;
+
+process.stdout.write(JSON.stringify({
+  resizeAfterCreate1, mouseupAfterCreate1, hostChildrenAfterCreate1, rescheduledWhileConnected1,
+  resizeAfterDestroy1, mouseupAfterDestroy1, hostChildrenAfterDestroy1,
+  queueEmptyAfterDestroyFrame1, destroyTwiceThrew,
+  resizeAfterCreate2, rescheduledWhileConnected2,
+  resizeAfterSelfStop2, hostChildrenAfterSelfStop2, queueEmptyAfterSelfStop2,
+}));
+"""
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed — graph lifecycle check skipped")
+class TestGraphLifecycle(unittest.TestCase):
+    def _run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_graph_lifecycle.js"
+            runner.write_text(GRAPH_LIFECYCLE_RUNNER_JS, encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "core.js"), str(ASSETS_DIR / "graph.js")],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_explicit_destroy_removes_listeners_clears_host_and_halts_the_loop(self):
+        out = self._run()
+        self.assertEqual(out["resizeAfterCreate1"], 1)
+        self.assertEqual(out["mouseupAfterCreate1"], 1)
+        self.assertEqual(out["hostChildrenAfterCreate1"], 2)   # canvas + tooltip
+        self.assertTrue(out["rescheduledWhileConnected1"], "loop did not reschedule while connected")
+        self.assertEqual(out["resizeAfterDestroy1"], 0)
+        self.assertEqual(out["mouseupAfterDestroy1"], 0)
+        self.assertEqual(out["hostChildrenAfterDestroy1"], 0)
+        self.assertTrue(out["queueEmptyAfterDestroyFrame1"], "loop rescheduled itself after destroy()")
+        self.assertFalse(out["destroyTwiceThrew"], "destroy() must be safe to call more than once")
+
+    def test_host_disconnection_alone_self_stops_the_loop_with_no_explicit_destroy_call(self):
+        out = self._run()
+        self.assertEqual(out["resizeAfterCreate2"], 1)
+        self.assertTrue(out["rescheduledWhileConnected2"])
+        self.assertEqual(out["resizeAfterSelfStop2"], 0)
+        self.assertEqual(out["hostChildrenAfterSelfStop2"], 0)
+        self.assertTrue(out["queueEmptyAfterSelfStop2"],
+                        "loop kept scheduling frames after its host left the document")
+
+
 # renderHealth() and renderStats() are the two views this task exists to
 # deliver. bar() and offenderNode() above are leaf helpers; dimensionCard's
 # clean/failing collapse and countTable's max-scaling, chip, and
@@ -813,6 +1166,14 @@ global.navigator = { clipboard: null };
 // by calling renderLog() again directly after firing a control's
 // listener, which is exactly what route() itself would do.
 global.route = function () {};
+// renderGraph() defers mounting the canvas (initGraph, from graph.js, never
+// loaded here) behind requestAnimationFrame so the host has real layout
+// dimensions first; that callback is never invoked here, so it is stubbed
+// inert and only renderGraph()'s synchronous control markup is exercised —
+// exactly the DOM-buildable half of the graph tab a serialised tree can
+// assert on, per the same split graph.js's own pure-function tests use for
+// the canvas-drawing half.
+global.requestAnimationFrame = function () {};
 
 const coreSrc = fs.readFileSync(process.argv[2], "utf8");
 const viewsSrc = fs.readFileSync(process.argv[3], "utf8");
@@ -860,6 +1221,7 @@ const tagClick = { loreQuery: window.LORE_QUERY, hash: window.location.hash };
 const beforeFilterLines = __logEntryLines();
 const logNode = renderLog();
 const inboxNode = renderInbox();
+const graphNode = renderGraph();
 
 // Drive the date filters the way a person would: pull the live (not yet
 // serialised) <input> elements out of the filters row and fire their
@@ -880,6 +1242,7 @@ process.stdout.write(JSON.stringify({
   tagClick: tagClick,
   log: serialize(logNode),
   inbox: serialize(inboxNode),
+  graph: serialize(graphNode),
   logAfterDateFilter: serialize(logAfterDateFilter),
   logEntryLinesBefore: beforeFilterLines,
   logEntryLinesAfter: afterFilterLines,
@@ -896,6 +1259,26 @@ process.stdout.write(JSON.stringify({
 # countTable's "Nothing to show." fallback; tags includes "foo" to click.
 RENDERED_VIEWS_PAYLOAD = {
     "pages": [{"id": "concept-a", "title": "Concept A"}, {"id": "Wiki_Page", "title": "Wiki Page"}],
+    # renderGraph() only reads LORE.graph.nodes to build its type/status/tag
+    # filter <select>s — three nodes chosen to pin the exact option lists:
+    # a "missing" ghost type (types include it, statuses filter it out since
+    # its status is "" and .filter(Boolean) drops falsy entries), a
+    # "deprecated" status, and one tag ("foo") to prove the tag <select> is
+    # populated from LORE.graph.nodes.tags, not LORE.stats.tags.
+    "graph": {
+        "nodes": [
+            {"id": "concept-a", "title": "Concept A", "type": "concept", "status": "stable",
+             "tags": ["foo"], "ghost": False, "in": 3, "out": 1},
+            {"id": "Wiki_Page", "title": "Wiki Page", "type": "source", "status": "deprecated",
+             "tags": [], "ghost": False, "in": 0, "out": 0},
+            {"id": "missing-target", "title": "Missing Target", "type": "missing", "status": "",
+             "tags": [], "ghost": True, "in": 1, "out": 0},
+        ],
+        "edges": [{"source": "concept-a", "target": "Wiki_Page"},
+                  {"source": "concept-a", "target": "missing-target"}],
+        "components": 1,
+        "isolated": [],
+    },
     "health": {
         "score": 78,
         "last_lint": {"date": "2026-08-10", "fixed": 4, "reported": 2, "days": 14},
@@ -1292,6 +1675,53 @@ class TestRenderedViews(unittest.TestCase):
         self.assertEqual(h2["text"], "raw/ — 0 file(s): empty")
         fallback = next(c for c in out["inbox"]["children"] if c.get("tag") == "p")
         self.assertEqual((fallback["class"], fallback["text"]), ("empty", "raw/ is empty."))
+
+    # -- graph tab controls (the DOM-buildable half; initGraph/canvas is
+    #    covered separately in TestGraphPureFunctions/TestGraphLifecycle) ---
+
+    def test_graph_view_filter_selects_are_populated_from_graph_nodes(self):
+        out = self._render()
+        selects = list(_rv_find_all(out["graph"], lambda n: n.get("tag") == "select"))
+        self.assertEqual(len(selects), 4)   # type, status, tag, hops
+
+        def option_texts(select):
+            return [c.get("text") for c in select["children"] if c.get("tag") == "option"]
+
+        # types includes "missing" (the ghost node's type); statuses drops
+        # the ghost's "" status via .filter(Boolean); tags comes from
+        # LORE.graph.nodes, not LORE.stats.tags.
+        self.assertEqual(option_texts(selects[0]), ["type: all", "concept", "missing", "source"])
+        self.assertEqual(option_texts(selects[1]), ["status: all", "deprecated", "stable"])
+        self.assertEqual(option_texts(selects[2]), ["tag: all", "foo"])
+        self.assertEqual(option_texts(selects[3]), ["1 hop(s)", "2 hop(s)", "3 hop(s)"])
+
+    def test_hide_deprecated_checkbox_defaults_checked_and_focus_checkbox_does_not(self):
+        # Pins the exact polarity the brief flagged as a likely error site:
+        # "hide deprecated" ships checked (the payload's one deprecated node
+        # is hidden until a person opts in to see it), "focus on click"
+        # ships unchecked (clicking a node navigates by default).
+        out = self._render()
+        checkboxes = list(_rv_find_all(
+            out["graph"], lambda n: n.get("tag") == "input" and n["attrs"].get("type") == "checkbox"))
+        self.assertEqual(len(checkboxes), 2)
+        hide_deprecated, focus_on_click = checkboxes
+        self.assertEqual(hide_deprecated["attrs"].get("checked"), "")
+        self.assertNotIn("checked", focus_on_click["attrs"])
+
+    def test_graph_view_has_a_dimming_search_box_and_a_clear_focus_button(self):
+        out = self._render()
+        search_inputs = list(_rv_find_all(
+            out["graph"], lambda n: n.get("tag") == "input" and n["attrs"].get("type") == "search"))
+        self.assertEqual(len(search_inputs), 1)
+        self.assertEqual(search_inputs[0]["attrs"].get("placeholder"), "dim non-matching")
+
+        buttons = list(_rv_find_all(out["graph"], lambda n: n.get("tag") == "button"))
+        self.assertEqual([_rv_all_text(b) for b in buttons], ["clear focus"])
+
+    def test_graph_view_is_registered_and_mounts_a_canvas_host(self):
+        out = self._render()
+        hosts = list(_rv_find_all(out["graph"], lambda n: n.get("class") == "graph-host"))
+        self.assertEqual(len(hosts), 1)
 
 
 if __name__ == "__main__":

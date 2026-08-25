@@ -104,3 +104,13 @@ mark { background: rgba(57,135,229,0.35); color: var(--ink); border-radius: 2px;
 .dim-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .check > summary { cursor: pointer; padding: 4px 0; }
 .bar { vertical-align: middle; }
+
+.graph-section { padding: 12px 16px; }
+.graph-host { position: relative; border: 1px solid var(--hairline); border-radius: 8px;
+              overflow: hidden; background: var(--surface-2); }
+.graph-host.mini { height: 220px; margin: 8px 0 18px; }
+.graph-canvas { display: block; cursor: grab; }
+.graph-tip { position: absolute; display: none; padding: 6px 9px; max-width: 280px;
+             background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px;
+             pointer-events: none; font-size: 12px; z-index: 3; }
+.graph-controls label { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
