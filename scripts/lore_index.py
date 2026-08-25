@@ -100,13 +100,18 @@ def group_entries(entries):
 
 def list_groups(entries):
     """(group, count) by the pages' own group value — deprecated pages count
-    too, so the agent sees every group that exists; Ungrouped last."""
+    too, so the agent sees every group that exists. Ordered the same way
+    group_entries orders headings (case-insensitively, then Ungrouped, then
+    Deprecated last) so a page whose frontmatter literally sets
+    group: Deprecated sorts where it renders, not alphabetically among the
+    ordinary groups."""
     counts = {}
     for entry in entries:
         name = entry["group"] or UNGROUPED
         counts[name] = counts.get(name, 0) + 1
-    ordinary = sorted((g for g in counts if g != UNGROUPED), key=str.casefold)
-    return [(g, counts[g]) for g in ordinary + ([UNGROUPED] if UNGROUPED in counts else [])]
+    ordinary = sorted((g for g in counts if g not in (UNGROUPED, DEPRECATED)), key=str.casefold)
+    special = [g for g in (UNGROUPED, DEPRECATED) if g in counts]
+    return [(g, counts[g]) for g in ordinary + special]
 
 
 def entry_line(entry):

@@ -235,6 +235,16 @@ class TestGroupsFlag(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, "Alpha\t2\nzeta\t1\nUngrouped\t1\n"))
         self.assertFalse((lore / "index.md").exists())          # --groups never writes
 
+    def test_a_page_with_literal_group_deprecated_sorts_like_its_heading(self):
+        # group_entries buckets a page whose frontmatter literally sets
+        # group: Deprecated under "## Deprecated" (heading_for returns the
+        # group verbatim for a non-deprecated page); --groups must order it
+        # the same way, not alphabetically among ordinary groups.
+        lore = make_lore({"A.md": page("A", "Deprecated"), "B.md": page("B", "Alpha")})
+        entries, _ = load_entries(lore)
+        self.assertEqual(list_groups(entries), [("Alpha", 1), ("Deprecated", 1)])
+        self.assertEqual([h for h, _ in group_entries(entries)], ["Alpha", "Deprecated"])
+
 
 class TestCheckFlag(unittest.TestCase):
     def test_fresh_index_is_not_drift(self):
