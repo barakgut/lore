@@ -177,7 +177,7 @@ def _issues(pages, index, log, today):
     contradictions = [_page_offender(p, f"{p['contradictions']} contradiction marker(s)")
                       for p in pages if p["contradictions"]]
     drafts = [_page_offender(p, "status: draft") for p in pages if p["status"] == "draft"]
-    over_cap = [{"ref": e["title"], "kind": "index", "detail": f"{e['chars']} chars (cap {INDEX_ENTRY_CAP})"}
+    over_cap = [{"ref": e["title"], "kind": "index", "detail": f"{e['chars']} chars (cap <{INDEX_ENTRY_CAP})"}
                 for e in index["over_cap"]]
     oversize = index["line_count"] > INDEX_LINE_TARGET
     if log["last_lint"]:

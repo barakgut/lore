@@ -127,10 +127,12 @@ def _text(value):
     The mini-parser returns a list for a block list and a dict for an indented
     mapping, so a page whose `title:`/`status:`/`description:` is followed by
     an indented block hands back a container where a string belongs. Coerce it
-    to "" — the caller's own fallback (the filename stem, "stable") then
-    applies exactly as it does for an absent key, and the schema health check
-    reports the page as an offender instead of the build dying on
-    `"".lower()`-style calls downstream.
+    to "": the caller's own fallback then applies exactly as it does for an
+    absent key (the filename stem for a title, "stable" for a status), and a
+    field with no fallback is reported by the schema health check like any
+    other missing one — rather than the container travelling on into
+    health/stats and killing the whole build with `.lower()` on a dict or
+    Counter() over a list.
     """
     return value if isinstance(value, str) else ""
 

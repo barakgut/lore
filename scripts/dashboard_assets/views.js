@@ -375,7 +375,8 @@ function renderLog() {
       && (!LOG_FILTERS.to || entry.date <= LOG_FILTERS.to)
       && (!needle || (entry.subject + " " + entry.detail).toLowerCase().includes(needle)));
     heading.textContent = entries.length + " of " + LORE.log.entries.length + " entries";
-    clear(tbody).append(...logRows(entries));
+    clear(tbody);
+    for (const row of logRows(entries)) tbody.append(row);
   }
 
   const verbSelect = el("select", { onchange: event => { LOG_FILTERS.verb = event.target.value; refresh(); } },
