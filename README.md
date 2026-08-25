@@ -156,10 +156,11 @@ ingesting to refresh it. Links back into `wiki/` and `raw/` are relative to
 where the file was written, so keep the dashboard and the lore together.
 
 It is a human view only. Claude never runs the script and never reads the
-file: the plugin's hook denies reading `<lore>/dashboard.html`, and the script
-adds it to the lore's `.ignore` (and to `.gitignore` too, when the lore is a
-git repository) so neither ripgrep nor git picks it up. Deleting it costs
-nothing — re-run the script.
+file: the plugin's hook denies reading `<lore>/dashboard.html`. When the
+output file lands inside the lore — the default, though not the `-o
+~/dash.html` form above — the script also adds it to the lore's `.ignore`
+(and to `.gitignore` too, when the lore is a git repository) so neither
+ripgrep nor git picks it up. Deleting it costs nothing — re-run the script.
 
 ## License
 
