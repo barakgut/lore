@@ -1198,6 +1198,14 @@ function makeNode(tag) {
     setAttribute(key, value) { this.attrs[key] = value; },
     addEventListener(type, fn) { this.listeners[type] = fn; },
     append(...kids) { for (const k of kids) if (k !== undefined && k !== null) this.children.push(k); },
+    // firstChild/removeChild are what core.js's clear() walks — the Log
+    // view's filters clear and refill their results <tbody> in place.
+    get firstChild() { return this.children[0] || null; },
+    removeChild(child) {
+      const i = this.children.indexOf(child);
+      if (i >= 0) this.children.splice(i, 1);
+      return child;
+    },
     get className() { return this._className; },
     set className(v) { this._className = v; },
     get textContent() { return this._text; },
@@ -1214,11 +1222,12 @@ global.document = {
 };
 global.window = { location: { hash: "" }, LORE_QUERY: undefined };
 global.navigator = { clipboard: null };
-// renderLog()'s filter controls call route() to re-render the current tab
-// in place, the way app.js wires up every filter; this harness never
-// loads app.js, so route is stubbed inert here — tests instead re-render
-// by calling renderLog() again directly after firing a control's
-// listener, which is exactly what route() itself would do.
+// The search view's filter <select>s call route() to re-render the current
+// tab in place, the way app.js wires up its filters; this harness never
+// loads app.js, so route is stubbed inert here. (The Log view's own filters
+// deliberately do not go through route(): they re-render just their results
+// <tbody> and count heading, which is what keeps the free-text box from
+// being destroyed — and so blurred — on every keystroke.)
 global.route = function () {};
 // renderGraph() defers mounting the canvas (initGraph, from graph.js, never
 // loaded here) behind requestAnimationFrame so the host has real layout
@@ -1274,15 +1283,35 @@ const tagClick = { loreQuery: window.LORE_QUERY, hash: window.location.hash };
 
 const beforeFilterLines = __logEntryLines();
 const logNode = renderLog();
+// Snapshotted before any filter is fired: the filters now update logNode's
+// own heading and <tbody> in place, so serialising it at the end of this
+// script would capture the *filtered* table, not the pristine one.
+const logSerialized = serialize(logNode);
 const inboxNode = renderInbox();
 const graphNode = renderGraph();
 
-// Drive the date filters the way a person would: pull the live (not yet
-// serialised) <input> elements out of the filters row and fire their
-// change listeners, then re-render — exactly what route() does on a real
-// change event in the browser.
+// Drive the filters the way a person would: pull the live (not yet
+// serialised) control elements out of the filters row and fire the exact
+// listener the browser would fire — change on the <select>/date inputs,
+// input on the free-text box, one keystroke at a time.
 const filtersRow = logNode.children[0];
 const [verbSelect, fromInput, toInput, textInput] = filtersRow.children;
+
+verbSelect.listeners.change({ target: { value: "ingest" } });
+const logAfterVerb = serialize(logNode);          // same node, updated in place
+
+textInput.listeners.input({ target: { value: "bbbb" } });
+const logAfterText = serialize(logNode);
+// The bug this pins: re-rendering the whole view through route() would swap
+// in a brand-new <input>, and the browser blurs the node it removed. The
+// element being typed into must still be the very same object, still in the
+// filters row, after the results update.
+const textInputSurvivedUpdate = filtersRow.children[3] === textInput;
+
+// Clear both again, the way a person would, before the date-range case.
+verbSelect.listeners.change({ target: { value: "" } });
+textInput.listeners.input({ target: { value: "" } });
+
 fromInput.listeners.change({ target: { value: "2026-02-01" } });
 toInput.listeners.change({ target: { value: "2026-03-10" } });
 const logAfterDateFilter = renderLog();
@@ -1294,9 +1323,12 @@ process.stdout.write(JSON.stringify({
   stats: serialize(statsNode),
   chipFound: !!chip,
   tagClick: tagClick,
-  log: serialize(logNode),
+  log: logSerialized,
   inbox: serialize(inboxNode),
   graph: serialize(graphNode),
+  logAfterVerb: logAfterVerb,
+  logAfterText: logAfterText,
+  textInputSurvivedUpdate: textInputSurvivedUpdate,
   logAfterDateFilter: serialize(logAfterDateFilter),
   logEntryLinesBefore: beforeFilterLines,
   logEntryLinesAfter: afterFilterLines,
@@ -1685,6 +1717,48 @@ class TestRenderedViews(unittest.TestCase):
         out = self._render()
         groups = _rv_ledger_groups(out["log"])
         self.assertEqual(groups["notes.txt"], ["2026-01-01", "2026-02-01", "2026-03-01"])
+
+    def test_verb_select_and_free_text_box_filter_the_table_in_place(self):
+        # Fired as a person fires them: change on the verb <select>, then
+        # input on the free-text box, both on the live tree — no re-render
+        # in between. Before the fix these called route(), which rebuilt the
+        # whole view: nothing at all happened to the tree the person was
+        # looking at (route is inert here), and in a browser the <input>
+        # being typed into was removed and replaced, so it lost focus and
+        # its caret after every keystroke.
+        out = self._render()
+        after_verb = [row["children"][0]["text"]
+                      for row in _rv_direct_table_rows(out["logAfterVerb"])]
+        # verb=ingest keeps entries 3, 4 and 6; the two skips and the answer go.
+        self.assertEqual(after_verb, ["2026-03-10", "2026-03-01", "2026-01-01"])
+        verb_h2 = next(c for c in out["logAfterVerb"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(verb_h2["text"], "3 of 6 entries")
+
+        after_text = [row["children"][0]["text"]
+                      for row in _rv_direct_table_rows(out["logAfterText"])]
+        # "bbbb" occurs only in entry 6's sha256 detail, and the verb filter
+        # is still applied on top of it — the two compose.
+        self.assertEqual(after_text, ["2026-01-01"])
+        text_h2 = next(c for c in out["logAfterText"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(text_h2["text"], "1 of 6 entries")
+
+        # ...and the box that was typed into is still the very same element,
+        # still sitting in the filters row: a whole-view re-render would have
+        # built a replacement, and a browser blurs the node it removes.
+        self.assertTrue(out["textInputSurvivedUpdate"],
+                        "the <input> being typed into was replaced by the filter update")
+
+    def test_the_per_file_ledger_table_labels_its_columns_like_the_main_one(self):
+        out = self._render()
+        details = list(_rv_find_all(out["log"], lambda n: n.get("tag") == "details"
+                                                           and n.get("class") == "tree"))
+        self.assertTrue(details)
+        for block in details:
+            table = next(c for c in block["children"] if c.get("tag") == "table")
+            thead = next(c for c in table["children"] if c.get("tag") == "thead")
+            row = thead["children"][0]
+            self.assertEqual([cell["text"] for cell in row["children"]],
+                             ["date", "verb", "subject", "detail"])
 
     def test_date_range_filter_is_inclusive_of_entries_exactly_on_from_and_to(self):
         out = self._render()

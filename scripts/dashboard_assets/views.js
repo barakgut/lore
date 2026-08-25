@@ -339,6 +339,12 @@ function subjectNode(entry) {
   return el("span", { text: entry.subject });
 }
 
+const LOG_COLUMNS = ["date", "verb", "subject", "detail"];
+
+function logHead() {
+  return el("thead", {}, el("tr", {}, LOG_COLUMNS.map(h => el("th", { text: h }))));
+}
+
 function logRows(entries) {
   return entries.map(entry => el("tr", {}, [
     el("td", { class: "mono", text: entry.date }),
@@ -349,26 +355,39 @@ function logRows(entries) {
 }
 
 function renderLog() {
-  const rerun = () => route();
   const verbs = [...new Set(LORE.log.entries.map(entry => entry.verb))].sort();
-  const verbSelect = el("select", { onchange: event => { LOG_FILTERS.verb = event.target.value; rerun(); } },
+  // Only the count heading and the results <tbody> depend on the filters, so
+  // a filter change re-renders exactly those two nodes in place. Calling
+  // route() instead — which is what every other filtered view does — would
+  // clear(main) and rebuild this whole view, replacing the very <input>
+  // being typed into: the browser blurs a node it removes, so the free-text
+  // box lost focus and its caret after every single keystroke.
+  const heading = el("h2");
+  const tbody = el("tbody");
+  function refresh() {
+    const needle = LOG_FILTERS.text.toLowerCase();
+    // LORE.log.entries is the payload's own array — .filter() below returns
+    // a new array and leaves it untouched, so re-filtering never mutates the
+    // newest-first order every other view relies on.
+    const entries = LORE.log.entries.filter(entry =>
+      (!LOG_FILTERS.verb || entry.verb === LOG_FILTERS.verb)
+      && (!LOG_FILTERS.from || entry.date >= LOG_FILTERS.from)
+      && (!LOG_FILTERS.to || entry.date <= LOG_FILTERS.to)
+      && (!needle || (entry.subject + " " + entry.detail).toLowerCase().includes(needle)));
+    heading.textContent = entries.length + " of " + LORE.log.entries.length + " entries";
+    clear(tbody).append(...logRows(entries));
+  }
+
+  const verbSelect = el("select", { onchange: event => { LOG_FILTERS.verb = event.target.value; refresh(); } },
     [el("option", { value: "", text: "verb: all" })].concat(verbs.map(verb =>
       el("option", { value: verb, text: verb, selected: LOG_FILTERS.verb === verb }))));
   const from = el("input", { type: "date", value: LOG_FILTERS.from, "aria-label": "from",
-                             onchange: event => { LOG_FILTERS.from = event.target.value; rerun(); } });
+                             onchange: event => { LOG_FILTERS.from = event.target.value; refresh(); } });
   const to = el("input", { type: "date", value: LOG_FILTERS.to, "aria-label": "to",
-                           onchange: event => { LOG_FILTERS.to = event.target.value; rerun(); } });
+                           onchange: event => { LOG_FILTERS.to = event.target.value; refresh(); } });
   const text = el("input", { type: "search", value: LOG_FILTERS.text, placeholder: "filter text",
-                             oninput: event => { LOG_FILTERS.text = event.target.value; rerun(); } });
-  const needle = LOG_FILTERS.text.toLowerCase();
-  // LORE.log.entries is the payload's own array — .filter() below returns a
-  // new array and leaves it untouched, so re-rendering with different
-  // filters never mutates the newest-first order every other view relies on.
-  const entries = LORE.log.entries.filter(entry =>
-    (!LOG_FILTERS.verb || entry.verb === LOG_FILTERS.verb)
-    && (!LOG_FILTERS.from || entry.date >= LOG_FILTERS.from)
-    && (!LOG_FILTERS.to || entry.date <= LOG_FILTERS.to)
-    && (!needle || (entry.subject + " " + entry.detail).toLowerCase().includes(needle)));
+                             oninput: event => { LOG_FILTERS.text = event.target.value; refresh(); } });
+  refresh();
 
   // ingest/skip headings are log.md's ledger convention (see the lore
   // schema doc): only those two verbs carry a raw/ filename as their
@@ -382,11 +401,8 @@ function renderLog() {
 
   return el("section", {}, [
     el("div", { class: "filters" }, [verbSelect, from, to, text]),
-    el("h2", { text: entries.length + " of " + LORE.log.entries.length + " entries" }),
-    el("table", {}, [
-      el("thead", {}, el("tr", {}, ["date", "verb", "subject", "detail"].map(h => el("th", { text: h })))),
-      el("tbody", {}, logRows(entries)),
-    ]),
+    heading,
+    el("table", {}, [logHead(), tbody]),
     el("h2", { text: "Malformed lines (" + LORE.log.malformed.length + ")" }),
     LORE.log.malformed.length
       ? el("ul", { class: "linklist" }, LORE.log.malformed.map(bad =>
@@ -402,7 +418,7 @@ function renderLog() {
           ([name, items]) => el("details", { class: "tree" }, [
             el("summary", {}, [el("span", { class: "mono", text: name }),
                                el("span", { class: "muted", text: "  " + items.length + " entry(ies)" })]),
-            el("table", {}, [el("tbody", {}, logRows([...items].reverse()))]),
+            el("table", {}, [logHead(), el("tbody", {}, logRows([...items].reverse()))]),
           ])))
       : el("p", { class: "empty", text: "No ingest or skip entries yet." }),
   ]);
