@@ -287,6 +287,78 @@ def check(lore):
     return sorted(drift)
 
 
+def _read(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def read_current_index(lore):
+    """(heading, target) for every entry line of the index on disk, following
+    hub lines into index/<Group>.md (the hub link text is that heading), and
+    whether index.md carries the generated marker."""
+    lore = Path(lore)
+    text = _read(lore / "index.md")
+    pairs = []
+
+    def walk(body, heading):
+        for line in body.split("\n"):
+            found = INDEX_HEADING_RE.match(line)
+            if found:
+                heading = found.group("heading")
+                continue
+            entry = INDEX_ENTRY_RE.match(line)
+            if not entry:
+                continue
+            target = entry.group("target").strip()
+            if target.startswith("index/") and target.endswith(".md"):
+                walk(_read(lore / target), entry.group("title").strip())
+            else:
+                pairs.append((heading, target))
+
+    walk(text, None)
+    return pairs, MARKER in text
+
+
+def is_curated(lore, entries):
+    """True when index.md is a hand-written pre-0.5 index that --seed-groups
+    must read before it is overwritten: no marker, no page carries group, and
+    at least one entry sits under a real topic heading."""
+    if any(entry["group"] for entry in entries):
+        return False
+    pairs, generated = read_current_index(lore)
+    if generated:
+        return False
+    return any(heading not in (None, UNGROUPED, DEPRECATED) for heading, _ in pairs)
+
+
+def seed_groups(lore):
+    """Stamp `group: <heading>` (after description:, else after title:) into
+    every indexed page that has frontmatter and no group. Deprecated-section
+    entries are skipped. Returns the (target, heading) pairs stamped."""
+    lore = Path(lore)
+    stamped, seen = [], set()
+    pairs, _ = read_current_index(lore)
+    for heading, target in pairs:
+        path = lore / target
+        if heading in (None, UNGROUPED, DEPRECATED) or target in seen or not path.is_file():
+            continue
+        seen.add(target)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        fields = read_scalars(text)
+        if fields is None or fields.get("group"):
+            continue
+        match = FRONTMATTER_RE.match(text)
+        lines = match.group(1).split("\n")
+        anchor = next((i for i, l in enumerate(lines) if l.startswith("description:")),
+                      next((i for i, l in enumerate(lines) if l.startswith("title:")), len(lines) - 1))
+        lines.insert(anchor + 1, f"group: {heading}")
+        path.write_text("---\n" + "\n".join(lines) + text[match.end(1):], encoding="utf-8")
+        stamped.append((target, heading))
+    return stamped
+
+
 def is_lore(lore):
     return (Path(lore) / "wiki").is_dir() and (Path(lore) / "CLAUDE.md").is_file()
 
@@ -321,6 +393,13 @@ def main(argv=None):
         for rel in drift:
             print(f"DRIFT {rel}")
         return 1 if drift else 0
+    if args.seed_groups:
+        for target, heading in seed_groups(lore):
+            print(f"seeded: {target} (group: {heading})")
+    elif is_curated(lore, load_entries(lore)[0]):
+        print("ERROR: index.md is hand-curated and no page carries group:; run --seed-groups once",
+              file=sys.stderr)
+        return 1
     if args.flat and (lore / "index").is_dir():
         shutil.rmtree(lore / "index")
     split = True if args.split else False if args.flat else (lore / "index").is_dir()

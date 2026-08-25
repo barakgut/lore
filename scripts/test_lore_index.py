@@ -430,5 +430,118 @@ class TestSplitCli(unittest.TestCase):
         self.assertEqual(check(lore), ["index/Old.md"])
 
 
+from lore_index import is_curated, read_current_index, seed_groups  # noqa: E402
+
+CURATED = ("# Lore Index\n\n## RF\n- [A](wiki/A.md) — old hook\n- [B](wiki/B.md) — old hook\n\n"
+           "## Deprecated\n- [D](wiki/D.md) — gone\n")
+
+
+class TestUpgradeGuard(unittest.TestCase):
+    def _old_lore(self):
+        return make_lore({"A.md": page("A"), "B.md": page("B"), "D.md": page("D", status="deprecated")},
+                         index_text=CURATED)
+
+    def test_read_current_index_pairs_and_marker(self):
+        pairs, generated = read_current_index(self._old_lore())
+        self.assertEqual(pairs, [("RF", "wiki/A.md"), ("RF", "wiki/B.md"), ("Deprecated", "wiki/D.md")])
+        self.assertFalse(generated)
+
+    def test_read_current_index_follows_hub_lines(self):
+        lore = make_lore({"A.md": page("A", "Hardware")})
+        run(lore, "--split")
+        pairs, generated = read_current_index(lore)
+        self.assertEqual((pairs, generated), ([("Hardware", "wiki/A.md")], True))
+
+    def test_curated_index_without_groups_is_refused(self):
+        lore = self._old_lore()
+        self.assertTrue(is_curated(lore, load_entries(lore)[0]))
+        proc = run(lore)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stderr, "ERROR: index.md is hand-curated and no page carries group:; run --seed-groups once\n")
+        self.assertEqual((lore / "index.md").read_text(), CURATED)      # untouched
+
+    def test_generated_index_is_never_curated(self):
+        lore = make_lore({"N.md": page("N", frontmatter=False)})        # renders under Ungrouped
+        self.assertEqual(run(lore).returncode, 0)
+        self.assertEqual(run(lore).returncode, 0)                        # second run: marker present
+        self.assertFalse(is_curated(lore, load_entries(lore)[0]))
+
+    def test_index_with_only_ungrouped_or_deprecated_headings_is_not_curated(self):
+        lore = make_lore({"A.md": page("A")}, index_text="# Lore Index\n\n## Ungrouped\n- [A](wiki/A.md)\n")
+        self.assertFalse(is_curated(lore, load_entries(lore)[0]))
+
+    def test_missing_index_is_not_curated(self):
+        lore = make_lore({"A.md": page("A")})
+        self.assertFalse(is_curated(lore, load_entries(lore)[0]))
+
+    def test_any_page_with_a_group_disables_the_guard(self):
+        lore = self._old_lore()
+        (lore / "wiki" / "A.md").write_text(page("A", "RF"))
+        self.assertEqual(run(lore).returncode, 0)
+
+    def test_check_ignores_the_guard(self):
+        self.assertEqual(run(self._old_lore(), "--check").returncode, 1)     # drift, not the ERROR
+
+    def test_heading_with_trailing_whitespace_is_read_clean(self):
+        lore = make_lore({"A.md": page("A")}, index_text="# Lore Index\n\n## RF   \n- [A](wiki/A.md)\n")
+        pairs, _ = read_current_index(lore)
+        self.assertEqual(pairs, [("RF", "wiki/A.md")])
+        self.assertTrue(is_curated(lore, load_entries(lore)[0]))
+
+    def test_missing_split_group_file_yields_no_pairs_for_that_heading(self):
+        lore = make_lore({"A.md": page("A", "Hardware"), "B.md": page("B", "Software")})
+        run(lore, "--split")
+        (lore / "index" / "Hardware.md").unlink()
+        pairs, generated = read_current_index(lore)
+        self.assertEqual(pairs, [("Software", "wiki/B.md")])
+        self.assertTrue(generated)
+
+
+class TestSeedGroups(unittest.TestCase):
+    def test_stamps_group_after_description_and_regenerates(self):
+        lore = make_lore({"A.md": page("A"), "B.md": page("B"), "D.md": page("D", status="deprecated")},
+                         index_text=CURATED)
+        proc = run(lore, "--seed-groups")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, "seeded: wiki/A.md (group: RF)\nseeded: wiki/B.md (group: RF)\n")
+        self.assertIn("description: about A\ngroup: RF\ntags:", (lore / "wiki" / "A.md").read_text())
+        self.assertNotIn("group:", (lore / "wiki" / "D.md").read_text())     # Deprecated entries skipped
+        index = (lore / "index.md").read_text()
+        self.assertIn(MARKER, index)
+        self.assertIn("## RF\n- [A](wiki/A.md) — about A\n- [B](wiki/B.md) — about B\n", index)
+        self.assertIn("## Deprecated\n- [D](wiki/D.md) — about D\n", index)
+
+    def test_seed_is_idempotent(self):
+        lore = make_lore({"A.md": page("A")}, index_text=CURATED)
+        run(lore, "--seed-groups")
+        proc = run(lore, "--seed-groups")
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+        self.assertEqual((lore / "wiki" / "A.md").read_text().count("group:"), 1)
+
+    def test_seed_falls_back_to_title_line_and_skips_pages_without_frontmatter(self):
+        lore = make_lore({"A.md": "---\ntype: concept\ntitle: A\ntags: [x]\n---\nbody\n",
+                          "N.md": page("N", frontmatter=False)},
+                         index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n- [N](wiki/N.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(), "---\ntype: concept\ntitle: A\ngroup: RF\ntags: [x]\n---\nbody\n")
+
+    def test_seed_appends_group_when_frontmatter_has_no_description_or_title(self):
+        lore = make_lore({"A.md": "---\ntype: concept\ntags: [x]\n---\nbody\n"},
+                         index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(),
+                         "---\ntype: concept\ntags: [x]\ngroup: RF\n---\nbody\n")
+
+    def test_seed_skips_a_page_with_no_frontmatter_even_under_a_real_heading(self):
+        lore = make_lore({"A.md": page("A", frontmatter=False)},
+                         index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(), page("A", frontmatter=False))
+
+    def test_seed_skips_an_index_entry_whose_file_does_not_exist(self):
+        lore = make_lore({}, index_text="# Lore Index\n\n## RF\n- [Ghost](wiki/Ghost.md)\n")
+        self.assertEqual(seed_groups(lore), [])
+
+
 if __name__ == "__main__":
     unittest.main()
