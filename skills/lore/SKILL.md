@@ -1,6 +1,6 @@
 ---
 name: lore
-description: Use when answering any domain or knowledge question in a project linked to a lore (its CLAUDE.md has a "## Knowledge Base" section naming the lore path), and as the shared contract for all lore-* skills. Defines the lore folder layout, page schema, retrieval ladder, and citation rules.
+description: Use when answering any domain or knowledge question in a project linked to a lore (its CLAUDE.md has a "## Knowledge Base" section naming the lore path), and as the shared contract for all lore-* skills. Defines the lore folder layout, page schema, retrieval ladder, index regeneration, and citation rules.
 ---
 
 # The Lore — Core Contract
@@ -16,9 +16,9 @@ Resolve `$LORE` with these rungs, first match wins. Never guess, never scan the 
 
    > No lore found. `cd` into a lore, pass its path (`/lore:lore-ingest <path>`), or add a `## Knowledge Base` section naming the lore path to this project's `CLAUDE.md` (snippet in the plugin README and in the `/lore:lore-init` report).
 
-Rung 2 needs all three of `index.md`, `raw/`, and `wiki/` — it fires on whatever directory the user happens to be in, and a lone `index.md` is a common filename. Rungs 1 and 3 need only `index.md`, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
+Rung 2 needs all three of `index.md`, `raw/`, and `wiki/` — it fires on whatever directory the user happens to be in, and a lone `index.md` is a common filename. Rungs 1 and 3 are satisfied by `index.md` alone, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
 
-If a rung matches but the path has no `index.md`, STOP and name the bad path — **never fall through** to the next rung. A stale `## Knowledge Base` path must be reported (suggest fixing the path in that section), not silently bypassed.
+If a rung matches but the path has no `index.md`, look for `wiki/` and `CLAUDE.md` under it first: a folder with both **is** a lore whose generated index is merely missing — regenerate it (**Index regeneration**) and carry on. Otherwise STOP and name the bad path — **never fall through** to the next rung. A stale `## Knowledge Base` path must be reported (suggest fixing the path in that section), not silently bypassed.
 
 Rungs 2 and 3 cannot both match: a lore's own `CLAUDE.md` is its schema and never carries a `## Knowledge Base` section.
 
@@ -131,9 +131,10 @@ Never load the whole wiki into context. The index is the map.
 ## Index regeneration
 
 `index.md` (and `index/<Group>.md` once split) is generated from the `group`,
-`title`, `description`, and `status` fields of every `wiki/*.md`. Never Edit or
-Write it — a plugin hook denies that. Change the page's frontmatter, then
-regenerate:
+`title`, `description`, and `status` fields of every `wiki/*.md`: one entry per
+page, `- [<title>](wiki/<file>) — <description>`, under one `##` heading per
+group, `## Ungrouped` and then `## Deprecated` last. Never Edit or Write it — a
+plugin hook denies that. Change the page's frontmatter, then regenerate:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lore_index.py" "$LORE"
@@ -142,30 +143,51 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lore_index.py" "$LORE"
 (If `CLAUDE_PLUGIN_ROOT` is unset, the script is `scripts/lore_index.py` under
 the plugin root — the directory that holds `skills/` and `hooks/`.)
 
-- **When:** exactly once, right before the commit, at the end of every flow
-  that touches `wiki/`: init, ingest, lint, discard, answer promotion. When
-  another skill says "regenerate the index", it means this section.
+- **When:** once per flow, right before the commit, at the end of every flow
+  that touches `wiki/`: init, ingest, lint, discard, answer promotion — plus
+  on sight of a lore whose `index.md` is missing (**Finding the lore**). A
+  second run this section orders — `--seed-groups`, `--split` — is part of
+  that one regeneration, not another one. Wherever any skill, or any flow in
+  this one (see **Discard flow** above), says "regenerate the index", it means
+  this section.
 - **Relay** every `WARN:` and `NOTE:` line the script prints in your report.
-  `WARN: no frontmatter wiki/X.md` and `WARN: over-cap wiki/X.md (<n> chars)`
-  are fixed in the page (frontmatter; a shorter `description`), never in the
-  index — lint does that.
+  `WARN: no frontmatter wiki/X.md` and
+  `WARN: over-cap wiki/X.md (<n> chars)` are both fixed in the page — add the
+  frontmatter; shorten that page's `description` — and never in the index,
+  which is generated from those pages; chasing those page-side fixes is lint's
+  job. The cap is 200: every entry line must come to fewer than 200
+  characters. Past it the script cuts the hook at a word boundary with `…`,
+  then the title, but never the link target — so a page whose title and path
+  alone fill the cap keeps a long line and its WARN until it is renamed.
 - **`ERROR: index.md is hand-curated and no page carries group:; run --seed-groups once`**
   (stderr, exit 1): the lore predates v0.5. Run the script once more with
-  `--seed-groups` — it stamps `group:` on every indexed page from the old
-  headings, then regenerates. Report which pages were stamped and continue.
+  `--seed-groups` — it stamps `group:` from the old headings onto each page
+  the old index listed under a real topic heading, then regenerates. Pages the
+  old index listed under `## Ungrouped` or `## Deprecated`, and pages it never
+  listed at all, are not stamped and land under `## Ungrouped`. Report which
+  pages were stamped, and continue.
 - **`NOTE: <n> entries > 200; run with --split to split the index`**: the
-  index is past its size target. If the lore's `CLAUDE.md` `## Layout`
-  section contains the line `Index stays flat by user choice`, relay the NOTE
-  and do nothing else. Otherwise ask the user once: split the index into a
-  hub plus one `index/<Group>.md` per group? Yes → re-run with `--split`,
-  then commit. No → append
+  index is past its size target. The refusal marker is a line of its own in
+  the lore's `CLAUDE.md` `## Layout` section that **begins**
+  `Index stays flat by user choice (` and carries a real date — prose
+  elsewhere in that section that merely describes the convention is not one,
+  and neither is an undated mention. If that marker line is there, relay the
+  NOTE and do nothing else. Otherwise ask the user once: split the index into
+  a hub plus one `index/<Group>.md` per group? Yes → re-run with `--split`,
+  then commit. No → append, as its own line at the end of that `## Layout`
+  section,
   `Index stays flat by user choice (YYYY-MM-DD); do not propose splitting again.`
-  to that `## Layout` section and commit it with the rest. The user reverts by
-  removing the line or by saying "split the index" (then run `--split`). Once
-  split, every plain run keeps the split; `--flat` returns to one file.
+  with `YYYY-MM-DD` replaced by today's date, and commit it with the rest. The
+  user reverts by deleting that line or by saying "split the index" (then run
+  `--split`). Once split, every plain run keeps the split; `--flat` returns to
+  one file.
 - **Group discipline:** before creating any page, run the script with
   `--groups` (prints `<group>\t<count>` per line) and reuse an existing group
   when one fits; create a new group only when nothing fits.
+- **`--check`** writes nothing: it prints `DRIFT <file>` for every index file
+  that no longer matches the pages, and exits 1 if any did. It is exempt from
+  the hand-curated refusal above. Use it to ask whether an index is stale
+  without touching it.
 - The script never drops a page: one without frontmatter is listed under
   `## Ungrouped` from its filename; a `status: deprecated` page is listed
   under `## Deprecated`, whatever its `group`.
