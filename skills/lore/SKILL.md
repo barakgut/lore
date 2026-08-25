@@ -29,11 +29,14 @@ Then read `<lore>/CLAUDE.md` — the lore's schema. The rules below are the defa
 ```
 <lore>/
   CLAUDE.md         # the schema: full rules — authoritative when it differs from this skill
+  dashboard.html    # optional human-only HTML view (scripts/lore_dashboard.py). NEVER read it
   index.md          # catalog: one line per wiki page — the primary retrieval tool
   log.md            # append-only history; also the processed-file ledger
   raw/              # inbox + originals. IMMUTABLE: never edit or delete anything here (a plugin hook denies Edit/Write into raw/)
   wiki/             # agent-maintained pages
 ```
+
+> `dashboard.html`, if present, is a generated human-only view of everything in the lore: it inlines the whole wiki, so reading it wastes an enormous amount of context and tells you nothing `index.md`, `wiki/` and `log.md` do not. Never read it, never edit it, never regenerate it — a plugin hook denies Read/Edit/Write on it. It is the human's window, not yours.
 
 ## Page schema
 

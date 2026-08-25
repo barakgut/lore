@@ -25,6 +25,12 @@ cat > "$LORE/log.md" <<EOF
 ## [$(date +%F)] init | lore created
 EOF
 cp "${CLAUDE_PLUGIN_ROOT}/skills/lore-init/templates/CLAUDE.md" "$LORE/CLAUDE.md"
+cat > "$LORE/.ignore" <<'EOF'
+dashboard.html
+EOF
+cat > "$LORE/.gitignore" <<'EOF'
+dashboard.html
+EOF
 ```
 
 If that copy fails — `CLAUDE_PLUGIN_ROOT` unset or the template not found there — locate `templates/CLAUDE.md` next to this SKILL.md and copy it. If you still cannot find it, STOP and tell the user: a lore without its `CLAUDE.md` has no schema layer, and step 2 will refuse to heal it later.
@@ -39,4 +45,4 @@ cd "$LORE" && git init -q && git add -A && git commit -q -m "init: lore scaffold
 
 With `--no-git` the lore has no history and no undo. Say so once in the report: ingest and lint will write pages without committing.
 
-5. Report: the lore path, what was created, whether git was initialised, and next steps — drop files into `raw/`, then either `cd` into the lore and run `/lore:lore-ingest`, or run `/lore:lore-link <path>` inside a project. Nothing was written outside the lore folder.
+5. Report: the lore path, what was created, whether git was initialised, and next steps — drop files into `raw/`, then either `cd` into the lore and run `/lore:lore-ingest`, or run `/lore:lore-link <path>` inside a project. Mention that the lore ignores `dashboard.html`, the optional human-only view (`python3 scripts/lore_dashboard.py <lore>` from the plugin repo). Nothing was written outside the lore folder.
