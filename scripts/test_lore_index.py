@@ -142,6 +142,22 @@ class TestEntryLine(unittest.TestCase):
         line, warning = entry_line({"file": "wiki/A.md", "title": "A", "hook": hook, "group": "G", "deprecated": False})
         self.assertEqual((len(line), warning), (199, None))
 
+    def test_prefix_alone_over_cap_cuts_the_title_not_the_link(self):
+        entry = {"file": "wiki/A.md", "title": "T" * 190, "hook": "x", "group": "G", "deprecated": False}
+        naive = f"- [{entry['title']}](wiki/A.md) — x"
+        line, warning = entry_line(entry)
+        self.assertLess(len(line), ENTRY_CAP)
+        self.assertTrue(line.endswith("…](wiki/A.md)"))              # link target intact
+        self.assertEqual(warning, f"WARN: over-cap wiki/A.md ({len(naive)} chars)")
+
+    def test_pathological_long_filename_is_emitted_as_is_with_warning(self):
+        long_file = "wiki/" + "f" * 250 + ".md"
+        entry = {"file": long_file, "title": "T", "hook": "x", "group": "G", "deprecated": False}
+        naive = f"- [T]({long_file}) — x"
+        line, warning = entry_line(entry)
+        self.assertEqual(line, naive)                                 # not truncated: cap can't be met
+        self.assertEqual(warning, f"WARN: over-cap {long_file} ({len(naive)} chars)")
+
 
 class TestRenderFlat(unittest.TestCase):
     def test_layout(self):

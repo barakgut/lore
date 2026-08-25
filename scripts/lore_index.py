@@ -104,12 +104,29 @@ def entry_line(entry):
     line = f"{prefix} — {entry['hook']}" if entry["hook"] else prefix
     if len(line) < ENTRY_CAP:
         return line, None
+    warning = f"WARN: over-cap {entry['file']} ({len(line)} chars)"
     budget = ENTRY_CAP - 1 - len(prefix) - len(" — ") - len("…")
-    hook = entry["hook"][:max(budget, 0)]
-    if " " in hook:
-        hook = hook.rsplit(" ", 1)[0]
-    cut = f"{prefix} — {hook}…" if hook else prefix
-    return cut, f"WARN: over-cap {entry['file']} ({len(line)} chars)"
+    if budget >= 0:
+        hook = entry["hook"][:budget]
+        if " " in hook:
+            hook = hook.rsplit(" ", 1)[0]
+        cut = f"{prefix} — {hook}…" if hook else prefix
+        return cut, warning
+    # The title+link prefix alone is already too long to fit any hook. Cut
+    # the title instead, at a word boundary, same "…" convention as above.
+    # Never cut the link target: a truncated path is a dead link, which is
+    # worse than a long line — so if even an empty title can't fit under
+    # the cap because the file path itself is too long, emit the line as-is.
+    overhead = len(f"- [{''}…]({entry['file']})")
+    title_budget = ENTRY_CAP - 1 - overhead
+    if title_budget <= 0:
+        return line, warning
+    title = entry["title"][:title_budget]
+    if " " in title:
+        title = title.rsplit(" ", 1)[0]
+    if not title:
+        return line, warning
+    return f"- [{title}…]({entry['file']})", warning
 
 
 def render_flat(entries):
