@@ -1,7 +1,9 @@
 """Tests for lore_dashboard_parse.py — run with: python3 -m unittest discover scripts"""
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from lore_dashboard_parse import (
     build_graph,
@@ -40,6 +42,7 @@ def make_lore(pages: dict) -> Path:
     (root / "raw").mkdir()
     (root / "index.md").write_text("# Lore Index\n")
     (root / "log.md").write_text("# Lore Log\n")
+    (root / "CLAUDE.md").write_text("# schema\n")
     for name, content in pages.items():
         (root / "wiki" / name).write_text(content)
     return root
@@ -246,6 +249,99 @@ class TestParseIndex(unittest.TestCase):
         self.assertEqual(parse_index(with_newline, load_pages(with_newline))["line_count"], 3)
         without = self._lore("# Lore Index\n\n- [A Page](wiki/A_Page.md) — hook")
         self.assertEqual(parse_index(without, load_pages(without))["line_count"], 3)
+
+    def test_group_is_read_from_frontmatter(self):
+        lore = make_lore({"A_Page.md": page_file("A Page").replace("description:", "group: RF\ndescription:")})
+        self.assertEqual(load_pages(lore)[0]["group"], "RF")
+        self.assertEqual(load_pages(make_lore({"B.md": page_file("B")}))[0]["group"], "")
+
+    def test_hub_lines_are_followed_into_group_files(self):
+        lore = self._lore("# Lore Index\n\n- [Hardware](index/Hardware.md) — 1 page: A Page\n")
+        (lore / "index").mkdir()
+        (lore / "index" / "Hardware.md").write_text("# Hardware\n<!-- generated -->\n\n- [A Page](wiki/A_Page.md) — the hook\n")
+        pages = load_pages(lore)
+        index = parse_index(lore, pages)
+        self.assertEqual([g["heading"] for g in index["groups"]], ["Hardware"])
+        self.assertEqual(index["groups"][0]["entries"][0]["id"], "A_Page")
+        self.assertEqual((index["orphans"], index["ghost_entries"], index["entry_count"]), ([], [], 1))
+        self.assertEqual(pages[0]["index_group"], "Hardware")
+
+    def test_hub_line_with_a_missing_group_file_is_a_ghost(self):
+        lore = self._lore("# Lore Index\n\n- [Gone](index/Gone.md) — 3 pages: X, Y, Z\n")
+        index = parse_index(lore, load_pages(lore))
+        self.assertEqual(index["ghost_entries"][0]["target"], "index/Gone.md")
+        self.assertEqual(index["orphans"], ["A_Page"])
+
+    def test_drift_is_reported_via_lore_index(self):
+        lore = self._lore("# Lore Index\n\n## RF\n- [A Page](wiki/A_Page.md) — the hook\n")
+        index = parse_index(lore, load_pages(lore))
+        self.assertEqual(index["drift"], ["index.md"])          # hand-written index ≠ render
+        import lore_index
+        lore_index.write_files(lore, lore_index.render(lore)[0])
+        self.assertEqual(parse_index(lore, load_pages(lore))["drift"], [])
+
+    def test_hub_line_with_an_empty_group_file_is_a_ghost(self):
+        # An existing-but-empty index/<Group>.md carries no title and no
+        # entries; treating it like "missing" (kept literal -> ghost) is
+        # safer than fabricating a headless group with zero entries.
+        lore = self._lore("# Lore Index\n\n- [Hardware](index/Hardware.md) — 1 page: A Page\n")
+        (lore / "index").mkdir()
+        (lore / "index" / "Hardware.md").write_text("")
+        index = parse_index(lore, load_pages(lore))
+        self.assertEqual(index["ghost_entries"][0]["target"], "index/Hardware.md")
+
+    def test_a_hub_like_line_inside_a_group_file_is_not_recursively_expanded(self):
+        # A group file is never supposed to contain another hub line, but if
+        # one shows up (hand-edited or corrupted) it must not be expanded
+        # again -- it is carried through as a plain entry and, since its
+        # target matches HUB_TARGET_RE, reported as a ghost rather than
+        # silently treated as a real page.
+        lore = self._lore("# Lore Index\n\n- [Hardware](index/Hardware.md) — 1 page: A Page\n")
+        (lore / "index").mkdir()
+        (lore / "index" / "Hardware.md").write_text(
+            "# Hardware\n<!-- generated -->\n\n"
+            "- [Nested](index/Nested.md) — looks like a hub\n"
+            "- [A Page](wiki/A_Page.md) — the hook\n")
+        index = parse_index(lore, load_pages(lore))
+        group = index["groups"][0]
+        self.assertEqual([e["id"] for e in group["entries"]], ["Nested", "A_Page"])
+        self.assertEqual(index["ghost_entries"], [{"title": "Nested", "target": "index/Nested.md"}])
+
+    def test_hub_target_with_a_collision_suffix_is_followed_as_written(self):
+        # render_split disambiguates a group-filename collision with a
+        # _2/_3 suffix; the hub line's actual link target must be followed
+        # verbatim rather than recomputed from the heading text.
+        lore = self._lore("# Lore Index\n\n- [Power/Thermal](index/Power_Thermal_2.md) — 1 page: A Page\n")
+        (lore / "index").mkdir()
+        (lore / "index" / "Power_Thermal_2.md").write_text(
+            "# Power/Thermal\n<!-- generated -->\n\n- [A Page](wiki/A_Page.md) — the hook\n")
+        index = parse_index(lore, load_pages(lore))
+        self.assertEqual([g["heading"] for g in index["groups"]], ["Power/Thermal"])
+        self.assertEqual(index["groups"][0]["entries"][0]["id"], "A_Page")
+
+    def test_drift_is_none_when_lore_index_is_unimportable(self):
+        lore = self._lore("# Lore Index\n\n## RF\n- [A Page](wiki/A_Page.md) — the hook\n")
+        with patch.dict(sys.modules, {"lore_index": None}):
+            index = parse_index(lore, load_pages(lore))
+        self.assertIsNone(index["drift"])
+
+    def test_a_wiki_entry_whose_title_contains_bracket_paren_does_not_crash(self):
+        # INDEX_ENTRY_RE's title group stops at the first "]", so a title
+        # containing a literal "](" makes it capture the wrong "target" --
+        # a pre-existing limit of the flat-index regex, not something hub
+        # lines introduce. The point here is just that _expand_hubs, which
+        # re-runs the same regex over every line looking for hub targets,
+        # must not raise or hang on it.
+        lore = self._lore("# Lore Index\n\n## RF\n- [A](B](wiki/A_Page.md) — hook\n")
+        index = parse_index(lore, load_pages(lore))
+        self.assertEqual(index["entry_count"], 1)
+
+    def test_drift_is_none_when_lore_index_check_raises(self):
+        lore = self._lore("# Lore Index\n\n## RF\n- [A Page](wiki/A_Page.md) — the hook\n")
+        import lore_index
+        with patch.object(lore_index, "check", side_effect=RuntimeError("boom")):
+            index = parse_index(lore, load_pages(lore))
+        self.assertIsNone(index["drift"])
 
 
 class TestParseLog(unittest.TestCase):

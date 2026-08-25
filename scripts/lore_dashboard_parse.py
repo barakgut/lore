@@ -172,6 +172,7 @@ def load_pages(lore):
             "type": _text(fields.get("type")),
             "status": _text(fields.get("status")) or "stable",
             "description": _text(fields.get("description")),
+            "group": _text(fields.get("group")),
             "tags": [str(t) for t in _as_list(fields.get("tags"))],
             "sources": _sources(fields.get("sources")),
             "generated": {"by": _as_dict(fields.get("generated")).get("by", ""),
@@ -192,6 +193,7 @@ def load_pages(lore):
 
 INDEX_ENTRY_RE = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<target>[^)]+)\)\s*(?:—|--|-)?\s*(?P<hook>.*)$")
 INDEX_HEADING_RE = re.compile(r"^##\s+(?P<heading>.+?)\s*$")
+HUB_TARGET_RE = re.compile(r"^index/[^/]+\.md$")
 LOG_HEADING_RE = re.compile(
     r"^##\s+\[(?P<date>\d{4}-\d{2}-\d{2})\]\s+"
     r"(?P<verb>ingest|lint|skip|init|answer|discard)\s+\|\s+(?P<subject>.+?)\s*$")
@@ -210,6 +212,41 @@ def _line_count(text):
     return len(text.split("\n")) - (1 if text.endswith("\n") else 0)
 
 
+def _expand_hubs(lore, text):
+    """The index's lines with each hub line replaced by a `##` heading plus
+    the entry lines of its index/<Group>.md. A hub line whose group file is
+    missing (or empty) is kept as-is, so it surfaces as a ghost entry."""
+    lines = []
+    for line in text.split("\n"):
+        match = INDEX_ENTRY_RE.match(line.rstrip())
+        target = match.group("target").strip() if match else ""
+        if not HUB_TARGET_RE.match(target):
+            lines.append(line)
+            continue
+        group_text = _read_text(Path(lore) / target)
+        if not group_text:
+            lines.append(line)
+            continue
+        group_lines = group_text.split("\n")
+        title = next((l[2:].strip() for l in group_lines if l.startswith("# ")),
+                     match.group("title").strip())
+        lines.append(f"## {title}")
+        lines += [l for l in group_lines if INDEX_ENTRY_RE.match(l.rstrip())]
+    return lines
+
+
+def _index_drift(lore):
+    """Paths whose content differs from a fresh lore_index.py render, or None
+    when the script is not importable (dashboard copied without it) or the
+    check itself raises — either way, drift reporting must never take the
+    whole dashboard build down with it."""
+    try:
+        from lore_index import check
+        return check(lore)
+    except Exception:
+        return None
+
+
 def parse_index(lore, pages):
     """Parse index.md into groups/entries; stamp group+hook onto page records."""
     text = _read_text(Path(lore) / "index.md")
@@ -217,7 +254,7 @@ def parse_index(lore, pages):
     groups, current = [], None
     entry_count, listed = 0, set()
     ghost_entries, over_cap = [], []
-    for line in text.split("\n"):
+    for line in _expand_hubs(lore, text):
         heading = INDEX_HEADING_RE.match(line)
         if heading:
             current = {"heading": heading.group("heading"),
@@ -235,7 +272,7 @@ def parse_index(lore, pages):
         page_id = Path(target).stem
         entry = {"title": match.group("title").strip(), "target": target, "id": page_id,
                  "hook": match.group("hook").strip(), "chars": len(line.rstrip()),
-                 "exists": page_id in by_id}
+                 "exists": page_id in by_id and not HUB_TARGET_RE.match(target)}
         current["entries"].append(entry)
         entry_count += 1
         if entry["exists"]:
@@ -262,6 +299,7 @@ def parse_index(lore, pages):
         "ghost_entries": ghost_entries,
         "over_cap": over_cap,
         "misplaced_deprecated": misplaced,
+        "drift": _index_drift(lore),
     }
 
 
