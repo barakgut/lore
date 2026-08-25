@@ -143,3 +143,49 @@ function renderBrowse() {
 }
 
 defineView("browse", "Browse", renderBrowse);
+
+const SEARCH_FILTERS = { type: "", status: "", tag: "" };
+
+function filterSelect(key, label, values, onChange) {
+  const select = el("select", { "aria-label": label, onchange: event => {
+    SEARCH_FILTERS[key] = event.target.value;
+    onChange();
+  } }, [el("option", { value: "", text: label + ": all" })]);
+  for (const value of values) {
+    select.append(el("option", { value: value, text: value,
+                                 selected: SEARCH_FILTERS[key] === value }));
+  }
+  return select;
+}
+
+function renderSearch() {
+  const box = document.getElementById("global-search");
+  if (window.LORE_QUERY !== undefined && box.value !== window.LORE_QUERY) {
+    box.value = window.LORE_QUERY;
+  }
+  const query = box.value;
+  const types = [...new Set(LORE.pages.map(p => p.type).filter(Boolean))].sort();
+  const statuses = [...new Set(LORE.pages.map(p => p.status))].sort();
+  const tags = [...new Set(LORE.pages.flatMap(p => p.tags))].sort();
+  const rerun = () => route();
+  const results = searchPages(query, SEARCH_FILTERS);
+  return el("section", {}, [
+    el("div", { class: "filters" }, [
+      filterSelect("type", "type", types, rerun),
+      filterSelect("status", "status", statuses, rerun),
+      filterSelect("tag", "tag", tags, rerun),
+    ]),
+    el("h2", { text: query ? results.length + " result(s) for “" + query + "”"
+                           : "Type in the search box above" }),
+    el("ul", { class: "results" }, results.map(result => el("li", {}, [
+      el("div", {}, [
+        pageLink(result.page.id, result.page.title),
+        el("span", { class: "badge", text: result.page.type || "—" }),
+        el("span", { class: "muted", text: " matched in " + result.field }),
+      ]),
+      el("div", { class: "muted snippet" }, highlight(result.snippet)),
+    ]))),
+  ]);
+}
+
+defineView("search", "Search", renderSearch);

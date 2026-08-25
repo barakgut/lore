@@ -89,3 +89,10 @@ sup.fn.dead a { color: var(--bad); }
 .tree > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .tree > summary::marker { color: var(--muted); }
 .tree > ul { margin-left: 14px; }
+
+.filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.results { list-style: none; padding: 0; }
+.results li { padding: 8px 0; border-bottom: 1px solid var(--hairline); }
+.results .badge { margin-left: 8px; }
+.snippet { font-size: 13px; }
+mark { background: rgba(57,135,229,0.35); color: var(--ink); border-radius: 2px; }
