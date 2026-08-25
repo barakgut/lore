@@ -755,5 +755,299 @@ class TestOffenderRendering(unittest.TestCase):
                                 "children": []})
 
 
+# renderHealth() and renderStats() are the two views this task exists to
+# deliver. bar() and offenderNode() above are leaf helpers; dimensionCard's
+# clean/failing collapse and countTable's max-scaling, chip, and
+# empty-table logic have no coverage beyond the source-text
+# defineView("health"...)/defineView("stats"...) greps without exercising
+# the actual render functions. This runs them for real: a single indirect
+# eval() over core.js + views.js concatenated — matching exactly how
+# lore_dashboard_html.py joins JS_ASSETS into one <script> block, since two
+# separate eval() calls would each get their own top-level lexical scope in
+# Node (unlike a browser's shared per-document scope across <script> tags),
+# and core.js's top-level `const LORE = ...` would then not be visible to
+# views.js's render functions — against a representative payload, with
+# document stubbed to a plain recording DOM (createElement/
+# createElementNS/createTextNode/getElementById), the same style of stub
+# used by BAR_RUNNER_JS and OFFENDER_RUNNER_JS above.
+RENDERED_VIEWS_RUNNER_JS = """
+const fs = require("fs");
+
+function makeNode(tag) {
+  return {
+    nodeType: 1, tag: tag, _className: "", attrs: {}, children: [], listeners: {}, _text: null,
+    setAttribute(key, value) { this.attrs[key] = value; },
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    append(...kids) { for (const k of kids) if (k !== undefined && k !== null) this.children.push(k); },
+    get className() { return this._className; },
+    set className(v) { this._className = v; },
+    get textContent() { return this._text; },
+    set textContent(v) { this._text = v; this.children = []; },
+  };
+}
+
+const loreJson = fs.readFileSync(process.argv[4], "utf8");
+global.document = {
+  createElement: (tag) => makeNode(tag),
+  createElementNS: (ns, tag) => makeNode(tag),
+  createTextNode: (text) => ({ nodeType: 3, text: String(text) }),
+  getElementById: (id) => (id === "lore-data" ? { textContent: loreJson } : makeNode("div")),
+};
+global.window = { location: { hash: "" }, LORE_QUERY: undefined };
+global.navigator = { clipboard: null };
+
+const coreSrc = fs.readFileSync(process.argv[2], "utf8");
+const viewsSrc = fs.readFileSync(process.argv[3], "utf8");
+(0, eval)(coreSrc + "\\n" + viewsSrc);
+
+function findButton(node, label) {
+  if (!node || node.nodeType !== 1) return null;
+  if (node.tag === "button" &&
+      node.children.some(c => c && c.nodeType === 3 && c.text === label)) {
+    return node;
+  }
+  for (const child of node.children || []) {
+    const found = findButton(child, label);
+    if (found) return found;
+  }
+  return null;
+}
+
+function serialize(node) {
+  if (node && node.nodeType === 3) return { kind: "text", text: node.text };
+  if (!node || node.nodeType !== 1) return null;
+  return {
+    kind: "el", tag: node.tag, class: (node.attrs && node.attrs.class) || node.className || null,
+    text: node.textContent, attrs: node.attrs,
+    children: (node.children || []).map(serialize),
+  };
+}
+
+const healthNode = renderHealth();
+const statsNode = renderStats();
+
+// Simulate clicking the "foo" tag chip before serialising — the click
+// handler is a live closure that only exists on the un-serialised tree.
+const chip = findButton(statsNode, "foo");
+if (chip && chip.listeners.click) chip.listeners.click();
+const tagClick = { loreQuery: window.LORE_QUERY, hash: window.location.hash };
+
+process.stdout.write(JSON.stringify({
+  health: serialize(healthNode),
+  stats: serialize(statsNode),
+  chipFound: !!chip,
+  tagClick: tagClick,
+}));
+"""
+
+# A representative payload covering, in LORE.health.dimensions: a dimension
+# with a mix of clean and failing checks (Integrity: 3 clean, 2 failing),
+# one where every check is clean (Schema: 2/2 clean), and one where none
+# are (Connectivity: 0/2 clean) — the three branches of dimensionCard's
+# clean/failing collapse. In LORE.stats: pages_by_type has rows with
+# differing counts (8 and 2, both against max 8) to pin countTable's bar
+# scaling by hand; pages_by_generator is deliberately empty to exercise
+# countTable's "Nothing to show." fallback; tags includes "foo" to click.
+RENDERED_VIEWS_PAYLOAD = {
+    "pages": [{"id": "concept-a", "title": "Concept A"}],
+    "health": {
+        "score": 78,
+        "last_lint": {"date": "2026-08-10", "fixed": 4, "reported": 2, "days": 14},
+        "dimensions": [
+            {   # mixed: 2 failing, 3 clean
+                "key": "integrity", "label": "Integrity", "weight": 25, "score": 0.72,
+                "checks": [
+                    {"key": "orphans", "label": "Orphan pages", "score": 1.0, "offenders": []},
+                    {"key": "ghost_entries", "label": "Ghost index entries", "score": 1.0,
+                     "offenders": []},
+                    {"key": "dead_wikilinks", "label": "Dead wikilinks", "score": 0.5,
+                     "offenders": [{"ref": "concept-a", "kind": "page",
+                                    "detail": "dead wikilinks: x"}]},
+                    {"key": "duplicate_titles", "label": "Duplicate titles", "score": 0.6,
+                     "offenders": [{"ref": "concept-a", "kind": "page",
+                                    "detail": "title collides"}]},
+                    {"key": "deprecated_placement", "label": "Deprecated pages misplaced",
+                     "score": 1.0, "offenders": []},
+                ],
+            },
+            {   # all clean
+                "key": "schema", "label": "Schema", "weight": 20, "score": 1.0,
+                "checks": [
+                    {"key": "required_fields", "label": "Frontmatter fields", "score": 1.0,
+                     "offenders": []},
+                    {"key": "legacy_fields", "label": "Unsupported pre-0.3 fields", "score": 1.0,
+                     "offenders": []},
+                ],
+            },
+            {   # none clean
+                "key": "connectivity", "label": "Connectivity", "weight": 15, "score": 0.15,
+                "checks": [
+                    {"key": "isolated", "label": "Isolated pages", "score": 0.0,
+                     "offenders": [{"ref": "orphan-target", "kind": "page",
+                                    "detail": "no inbound or outbound wikilinks"}]},
+                    {"key": "no_inbound", "label": "Pages with no inbound link", "score": 0.3,
+                     "offenders": [{"ref": "concept-a", "kind": "page",
+                                    "detail": "no page links here"}]},
+                ],
+            },
+        ],
+    },
+    "stats": {
+        "pages_by_type": [{"key": "concept", "count": 8}, {"key": "source", "count": 2}],
+        "pages_by_status": [{"key": "stable", "count": 6}, {"key": "draft", "count": 1}],
+        "pages_by_generator": [],
+        "raw_by_ext": [{"key": ".pdf", "count": 3, "bytes": 40000}],
+        "raw_by_state": [{"key": "PROCESSED", "count": 3}],
+        "raw_total_bytes": 40000,
+        "coverage": {
+            "raw_with_pages": 3, "raw_without_pages": 0,
+            "pages_per_raw": [{"file": "notes.pdf", "count": 2}],
+            "uncited": [],
+        },
+        "graph": {
+            "nodes": 8, "pages": 7, "ghosts": 1, "edges": 10, "avg_degree": 2.5, "components": 1,
+            "hubs": [{"id": "concept-a", "title": "Concept A", "count": 4}],
+        },
+        "tags": [{"key": "foo", "count": 5}, {"key": "bar", "count": 1}],
+        "untagged": [],
+        "log": {
+            "by_verb": [{"key": "ingest", "count": 5}],
+            "ingests_per_week": [{"week": "2026-W30", "count": 2}],
+            "answers": 1, "discards": 0, "entries": 6, "malformed": 0,
+        },
+    },
+}
+
+
+def _rv_all_text(node):
+    """Concatenate every text/mark leaf under a serialised node."""
+    if node is None:
+        return ""
+    if node.get("kind") == "text":
+        return node.get("text") or ""
+    parts = [node.get("text") or ""]
+    for child in node.get("children") or []:
+        parts.append(_rv_all_text(child))
+    return "".join(parts)
+
+
+def _rv_find_all(node, predicate):
+    """Depth-first search over a serialised node tree for matching elements."""
+    if node is None or node.get("kind") != "el":
+        return
+    if predicate(node):
+        yield node
+    for child in node.get("children") or []:
+        yield from _rv_find_all(child, predicate)
+
+
+def _rv_count_table_div(root, title):
+    """The countTable() wrapper <div> whose first child is <h3 text=title>."""
+    for div in _rv_find_all(root, lambda n: n.get("tag") == "div"):
+        kids = [c for c in (div.get("children") or []) if c and c.get("kind") == "el"]
+        if kids and kids[0].get("tag") == "h3" and kids[0].get("text") == title:
+            return div
+    return None
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed — rendered-view check skipped")
+class TestRenderedViews(unittest.TestCase):
+    def _render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_rendered_views.js"
+            payload = Path(tmp) / "payload.json"
+            runner.write_text(RENDERED_VIEWS_RUNNER_JS, encoding="utf-8")
+            payload.write_text(json.dumps(RENDERED_VIEWS_PAYLOAD), encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "core.js"), str(ASSETS_DIR / "views.js"),
+                 str(payload)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_dimension_with_mixed_checks_collapses_clean_ones_and_lists_failing_ones(self):
+        out = self._render()
+        dimensions = list(_rv_find_all(
+            out["health"], lambda n: n.get("tag") == "section" and n.get("class") == "dimension"))
+        self.assertEqual(len(dimensions), 3)
+        mixed = dimensions[0]
+        details = list(_rv_find_all(mixed, lambda n: n.get("tag") == "details"
+                                                      and n.get("class") == "check"))
+        self.assertEqual(len(details), 2)
+        text = _rv_all_text(mixed)
+        self.assertIn("Dead wikilinks", text)
+        self.assertIn("Duplicate titles", text)
+        self.assertIn("3 other check(s) clean.", text)
+        self.assertNotIn("All 5 checks clean.", text)
+
+    def test_dimension_with_all_checks_clean_collapses_to_one_line_with_no_details(self):
+        out = self._render()
+        dimensions = list(_rv_find_all(
+            out["health"], lambda n: n.get("tag") == "section" and n.get("class") == "dimension"))
+        clean_dim = dimensions[1]
+        details = list(_rv_find_all(clean_dim, lambda n: n.get("tag") == "details"))
+        self.assertEqual(details, [])
+        text = _rv_all_text(clean_dim)
+        self.assertIn("All 2 checks clean.", text)
+        self.assertNotIn("other check(s) clean", text)
+
+    def test_dimension_with_no_checks_clean_lists_all_and_omits_the_clean_line(self):
+        out = self._render()
+        dimensions = list(_rv_find_all(
+            out["health"], lambda n: n.get("tag") == "section" and n.get("class") == "dimension"))
+        none_clean = dimensions[2]
+        details = list(_rv_find_all(none_clean, lambda n: n.get("tag") == "details"
+                                                           and n.get("class") == "check"))
+        self.assertEqual(len(details), 2)
+        text = _rv_all_text(none_clean)
+        self.assertNotIn("other check(s) clean", text)
+        self.assertNotIn("All 2 checks clean.", text)
+
+    def test_lint_line_and_standing_judgment_note_are_present(self):
+        out = self._render()
+        text = _rv_all_text(out["health"])
+        self.assertIn("Last lint 2026-08-10 (14 days ago): 4 fixed, 2 reported.", text)
+        self.assertIn("Judgment checks (not scored)", text)
+        self.assertIn(
+            "Active contradiction cross-check, footnote-discipline judgment, missing concept "
+            "pages, missing cross-references, knowledge gaps and discard candidates need the "
+            "agent; they are never computed here.", text)
+
+    def test_count_table_scales_bars_against_the_largest_row(self):
+        out = self._render()
+        div = _rv_count_table_div(out["stats"], "By type")
+        self.assertIsNotNone(div)
+        table = next(c for c in div["children"] if c.get("tag") == "table")
+        tbody = next(c for c in table["children"] if c.get("tag") == "tbody")
+        rows = tbody["children"]
+        self.assertEqual(len(rows), 2)
+        widths = []
+        for row in rows:
+            bar_td = row["children"][2]
+            svg = bar_td["children"][0]
+            filled_rect = svg["children"][1]
+            widths.append(filled_rect["attrs"]["width"])
+        # Hand-derived from the stated rule (filled = count/max * 120px
+        # track), never obtained by calling countTable/bar and copying the
+        # result: count 8 of max 8 -> fraction 1 -> full 120px track; count
+        # 2 of max 8 -> fraction 0.25 -> 30px. Both fractions are exact
+        # powers of two, so there is no floating-point rounding to resolve.
+        self.assertEqual(widths, [120, 30])
+
+    def test_count_table_empty_rows_renders_the_empty_fallback(self):
+        out = self._render()
+        div = _rv_count_table_div(out["stats"], "By generator")
+        self.assertIsNotNone(div)
+        self.assertEqual([c.get("tag") for c in div["children"]], ["h3", "p"])
+        fallback = div["children"][1]
+        self.assertEqual(fallback.get("class"), "empty")
+        self.assertEqual(fallback.get("text"), "Nothing to show.")
+
+    def test_tag_chip_click_queries_search_by_tag_and_navigates(self):
+        out = self._render()
+        self.assertTrue(out["chipFound"], "no chip labelled 'foo' was found in the tags table")
+        self.assertEqual(out["tagClick"], {"loreQuery": "tag:foo", "hash": "#search"})
+
+
 if __name__ == "__main__":
     unittest.main()
