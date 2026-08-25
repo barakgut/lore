@@ -84,3 +84,8 @@ sup.fn a { font-size: 10px; padding: 0 2px; }
 sup.fn.dead a { color: var(--bad); }
 .linklist { list-style: none; margin: 6px 0 14px; padding: 0; }
 .linklist li { padding: 2px 0; }
+
+.tree { border-bottom: 1px solid var(--hairline); padding: 6px 0; }
+.tree > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.tree > summary::marker { color: var(--muted); }
+.tree > ul { margin-left: 14px; }

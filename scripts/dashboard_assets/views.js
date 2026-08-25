@@ -104,3 +104,42 @@ function renderPage(id) {
 }
 
 defineView("page", "Page", renderPage);
+
+function browseEntry(entry) {
+  return el("li", {}, [
+    entry.exists ? pageLink(entry.id, entry.title) : el("span", { class: "dead", text: entry.title }),
+    entry.hook ? el("span", { class: "muted", text: " — " + entry.hook }) : null,
+    entry.exists ? null : el("span", { class: "muted", text: " (missing file)" }),
+  ]);
+}
+
+function renderBrowse() {
+  const groups = LORE.index.groups.map(group => el("details", {
+    class: "tree", open: !group.deprecated,
+  }, [
+    el("summary", {}, [
+      el("span", { text: group.heading || "(ungrouped)" }),
+      el("span", { class: "muted", text: "  " + group.entries.length }),
+    ]),
+    el("ul", { class: "linklist" }, group.entries.map(browseEntry)),
+  ]));
+  const orphans = LORE.index.orphans;
+  const ghosts = LORE.index.ghost_entries;
+  return el("section", {}, [
+    el("h2", { text: "index.md — " + LORE.index.entry_count + " entries, "
+                     + LORE.index.line_count + " lines" }),
+    groups.length ? el("div", {}, groups) : el("p", { class: "empty", text: "The index has no entries." }),
+    el("h2", { text: "Not in the index (" + orphans.length + ")" }),
+    orphans.length
+      ? el("ul", { class: "linklist" }, orphans.map(id => el("li", {}, [pageLink(id)])))
+      : el("p", { class: "empty", text: "Every page is indexed." }),
+    el("h2", { text: "Ghost entries (" + ghosts.length + ")" }),
+    ghosts.length
+      ? el("ul", { class: "linklist" }, ghosts.map(entry =>
+          el("li", {}, [el("span", { class: "dead", text: entry.title }),
+                        el("span", { class: "muted", text: " → " + entry.target })])))
+      : el("p", { class: "empty", text: "No index line points at a missing file." }),
+  ]);
+}
+
+defineView("browse", "Browse", renderBrowse);

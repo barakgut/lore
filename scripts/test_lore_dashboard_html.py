@@ -228,5 +228,54 @@ class TestPageViewAssets(unittest.TestCase):
         self.assertRegex(source, r'javascript', re.IGNORECASE)
 
 
+class TestBrowseView(unittest.TestCase):
+    def test_browse_view_is_registered(self):
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertIn('defineView("browse"', source)
+
+    def test_details_styling_ships(self):
+        self.assertIn(".tree", (ASSETS_DIR / "app.css").read_text(encoding="utf-8"))
+
+    def test_deprecated_group_collapses_other_groups_stay_open(self):
+        # Spec: "## Deprecated" starts collapsed, every other group open.
+        # Pins the exact polarity of the <details open> formula — an
+        # inverted `open: group.deprecated` would still "mention"
+        # .deprecated but would collapse every non-deprecated group and
+        # open Deprecated, the opposite of the spec.
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertRegex(source, r"open:\s*!\s*group\.deprecated")
+
+    def test_missing_index_entries_do_not_link_to_a_dead_page_route(self):
+        # entry.exists is false when the index line's target has no
+        # backing page (its id is not in LORE.pages). Routing such an
+        # entry to "#page/<id>" would hit renderPage(id), find nothing,
+        # and silently render an empty "No page with id ..." view. The
+        # entry must render as inert text instead of a page link.
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertRegex(source, r"entry\.exists\s*\?\s*pageLink\(entry\.id")
+
+    def test_ghost_entries_are_rendered_without_assuming_an_id_field(self):
+        # LORE.index.ghost_entries entries carry only {title, target} —
+        # no id (they never matched a page). The ghost-entries rendering
+        # must not read entry.id.
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        start = source.index("ghost_entries")
+        end = source.index('defineView("browse"')
+        section = source[start:end]
+        self.assertNotIn("entry.id", section)
+        self.assertIn("entry.target", section)
+
+    def test_orphans_and_ghosts_sections_read_from_the_index(self):
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertIn("LORE.index.orphans", source)
+        self.assertIn("LORE.index.ghost_entries", source)
+        self.assertIn("Not in the index", source)
+        self.assertIn("Ghost entries", source)
+
+    def test_group_summary_shows_entry_count(self):
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertIn("group.entries.length", source)
+
+
 if __name__ == "__main__":
     unittest.main()
