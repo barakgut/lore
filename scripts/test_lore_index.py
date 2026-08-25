@@ -542,6 +542,46 @@ class TestSeedGroups(unittest.TestCase):
         lore = make_lore({}, index_text="# Lore Index\n\n## RF\n- [Ghost](wiki/Ghost.md)\n")
         self.assertEqual(seed_groups(lore), [])
 
+    def test_seed_preserves_a_block_scalar_description(self):
+        text = "---\ntype: concept\ntitle: A\ndescription: |\n  line one\n  line two\ntags: [x]\n---\nbody\n"
+        lore = make_lore({"A.md": text}, index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        result = (lore / "wiki" / "A.md").read_text()
+        self.assertEqual(result, "---\ntype: concept\ntitle: A\ndescription: |\n  line one\n  line two\n"
+                                  "group: RF\ntags: [x]\n---\nbody\n")
+        self.assertEqual(read_scalars(result)["description"], "|")   # pre-existing read_scalars limitation, unaffected
+
+    def test_seed_preserves_a_block_scalar_with_an_internal_blank_line(self):
+        text = "---\ntype: concept\ntitle: A\ndescription: |\n  line one\n\n  line two\ntags: [x]\n---\nbody\n"
+        lore = make_lore({"A.md": text}, index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(),
+                         "---\ntype: concept\ntitle: A\ndescription: |\n  line one\n\n  line two\n"
+                         "group: RF\ntags: [x]\n---\nbody\n")
+
+    def test_seed_preserves_a_folded_scalar_description(self):
+        text = "---\ntype: concept\ntitle: A\ndescription: >\n  line one\n  line two\ntags: [x]\n---\nbody\n"
+        lore = make_lore({"A.md": text}, index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(),
+                         "---\ntype: concept\ntitle: A\ndescription: >\n  line one\n  line two\n"
+                         "group: RF\ntags: [x]\n---\nbody\n")
+
+    def test_seed_preserves_a_multiline_title_fallback(self):
+        text = "---\ntype: concept\ntitle: |\n  A Title\n  Continued\ntags: [x]\n---\nbody\n"
+        lore = make_lore({"A.md": text}, index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        self.assertEqual(seed_groups(lore), [("wiki/A.md", "RF")])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(),
+                         "---\ntype: concept\ntitle: |\n  A Title\n  Continued\ngroup: RF\ntags: [x]\n---\nbody\n")
+
+    def test_seed_is_idempotent_on_a_page_with_a_block_scalar_description(self):
+        text = "---\ntype: concept\ntitle: A\ndescription: |\n  line one\n  line two\ntags: [x]\n---\nbody\n"
+        lore = make_lore({"A.md": text}, index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
+        seed_groups(lore)
+        first = (lore / "wiki" / "A.md").read_text()
+        self.assertEqual(seed_groups(lore), [])
+        self.assertEqual((lore / "wiki" / "A.md").read_text(), first)
+
 
 if __name__ == "__main__":
     unittest.main()

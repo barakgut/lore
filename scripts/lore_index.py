@@ -333,10 +333,39 @@ def is_curated(lore, entries):
     return any(heading not in (None, UNGROUPED, DEPRECATED) for heading, _ in pairs)
 
 
+def _after_value(lines, start):
+    """Index right after the (possibly multi-line block-scalar) value that
+    begins at lines[start], so a new top-level key can be inserted there
+    without splitting a `description: |`/`title: >` block apart. A
+    continuation line begins with whitespace; a blank line still counts as
+    part of the block when a later indented line follows before the next
+    top-level key. For an ordinary single-line value this is just start + 1,
+    same as before."""
+    i = start
+    while i + 1 < len(lines):
+        nxt = lines[i + 1]
+        if nxt and nxt[0].isspace():
+            i += 1
+            continue
+        if not nxt:
+            j = i + 2
+            while j < len(lines) and not lines[j]:
+                j += 1
+            if j < len(lines) and lines[j] and lines[j][0].isspace():
+                i += 1
+                continue
+        break
+    return i + 1
+
+
 def seed_groups(lore):
     """Stamp `group: <heading>` (after description:, else after title:) into
     every indexed page that has frontmatter and no group. Deprecated-section
-    entries are skipped. Returns the (target, heading) pairs stamped."""
+    entries are skipped. Returns the (target, heading) pairs stamped.
+
+    The insertion point is placed after the anchor's full value, including
+    any block-scalar continuation lines, so a multi-line description: | or
+    title: > is never split apart."""
     lore = Path(lore)
     stamped, seen = [], set()
     pairs, _ = read_current_index(lore)
@@ -351,9 +380,13 @@ def seed_groups(lore):
             continue
         match = FRONTMATTER_RE.match(text)
         lines = match.group(1).split("\n")
-        anchor = next((i for i, l in enumerate(lines) if l.startswith("description:")),
-                      next((i for i, l in enumerate(lines) if l.startswith("title:")), len(lines) - 1))
-        lines.insert(anchor + 1, f"group: {heading}")
+        description = next((i for i, l in enumerate(lines) if l.startswith("description:")), None)
+        if description is not None:
+            insert_at = _after_value(lines, description)
+        else:
+            title = next((i for i, l in enumerate(lines) if l.startswith("title:")), None)
+            insert_at = _after_value(lines, title) if title is not None else len(lines)
+        lines.insert(insert_at, f"group: {heading}")
         path.write_text("---\n" + "\n".join(lines) + text[match.end(1):], encoding="utf-8")
         stamped.append((target, heading))
     return stamped
