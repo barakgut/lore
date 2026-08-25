@@ -8,8 +8,8 @@ read are skipped with a note in the log, never silently dropped. Link any
 project to the lore with one command.
 
 Zero dependencies: markdown + ripgrep, plus git for the undo history (optional,
-via `--no-git`) and python3 for reading spreadsheets. No databases, no APIs, no
-models.
+via `--no-git`) and python3 for reading spreadsheets and for the optional
+dashboard. No databases, no APIs, no models.
 
 ## Install
 
@@ -142,6 +142,25 @@ revert, unless the lore was created with `--no-git`.
 
 By default the lore is its own git repository — back it up like any other repo,
 or add a remote and push it to carry your knowledge base between machines.
+
+## Dashboard (for humans)
+
+    python3 scripts/lore_dashboard.py <lore>          # writes <lore>/dashboard.html
+    python3 scripts/lore_dashboard.py <lore> -o ~/dash.html
+
+One self-contained HTML file — no server, no dependencies, no network — with
+tabs for an overview, a mechanical health score, statistics, the wikilink
+graph, the index as a topic tree, full-text search, the log, and the `raw/`
+inbox. Open it in any browser; it is a snapshot, so re-run the script after
+ingesting to refresh it. Links back into `wiki/` and `raw/` are relative to
+where the file was written, so keep the dashboard and the lore together.
+
+It is a human view only. Claude never runs the script and never reads the
+file: the plugin's hook denies reading `<lore>/dashboard.html`. When the
+output file lands inside the lore — the default, though not the `-o
+~/dash.html` form above — the script also adds it to the lore's `.ignore`
+(and to `.gitignore` too, when the lore is a git repository) so neither
+ripgrep nor git picks it up. Deleting it costs nothing — re-run the script.
 
 ## License
 
