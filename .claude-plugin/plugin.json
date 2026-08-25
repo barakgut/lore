@@ -1,6 +1,6 @@
 {
   "name": "lore",
   "version": "0.4.0",
-  "description": "Lore (Long-term Organized Reference): a persistent, human-readable knowledge base on disk, maintained by Claude Code skills: drop files into raw/, get an interlinked markdown wiki with a catalog index. Link any project to it with /lore:lore-link.",
+  "description": "Lore (Long-term Organized Reference): a persistent, human-readable knowledge base on disk, maintained by Claude Code skills: drop files into raw/, get an interlinked markdown wiki with a catalog index. Link any project to it with a ## Knowledge Base section in its CLAUDE.md.",
   "author": { "name": "Barak Gutman" }
 }

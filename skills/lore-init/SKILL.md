@@ -8,7 +8,7 @@ description: Use when the user runs /lore:lore-init [path] [--no-git] — create
 Follow the `lore` skill for all conventions. The full-rules schema every new lore is seeded with lives at `${CLAUDE_PLUGIN_ROOT}/skills/lore-init/templates/CLAUDE.md` — i.e. `templates/CLAUDE.md` next to this file, if you need to locate it another way.
 
 1. Resolve `LORE` = the path argument if given, else `$HOME/lore`. Expand to an absolute path. Note whether the user passed `--no-git` — it decides step 4's last block.
-2. **Already a lore?** If `$LORE/index.md` exists: touch nothing. Report "already a lore, nothing to do" with the path, remind the user that a lore needs no config — `cd` into it, or run `/lore:lore-link <path>` in a project — and stop.
+2. **Already a lore?** If `$LORE/index.md` exists: touch nothing. Report "already a lore, nothing to do" with the path, remind the user that a lore needs no config — `cd` into it, or add the `## Knowledge Base` section from step 5 to a project's `CLAUDE.md` — and stop.
 3. **Non-empty, non-lore folder?** If `$LORE` exists, is non-empty, and has no `index.md`: refuse and ask the user for a different path. Never scaffold over foreign files.
 4. Scaffold:
 
@@ -45,4 +45,11 @@ cd "$LORE" && git init -q && git add -A && git commit -q -m "init: lore scaffold
 
 With `--no-git` the lore has no history and no undo. Say so once in the report: ingest and lint will write pages without committing.
 
-5. Report: the lore path, what was created, whether git was initialised, and next steps — drop files into `raw/`, then either `cd` into the lore and run `/lore:lore-ingest`, or run `/lore:lore-link <path>` inside a project. Mention that the lore ignores `dashboard.html`, the optional human-only view (`python3 scripts/lore_dashboard.py <lore>` from the plugin repo). Nothing was written outside the lore folder.
+5. Report: the lore path, what was created, whether git was initialised, and next steps — drop files into `raw/`, then `cd` into the lore and run `/lore:lore-ingest`. Mention that the lore ignores `dashboard.html`, the optional human-only view (`python3 scripts/lore_dashboard.py <lore>` from the plugin repo). Nothing was written outside the lore folder.
+
+   Then print this block verbatim, with `$LORE` substituted, and tell the user to paste it into the `CLAUDE.md` of every project that should use this lore (one lore can serve any number of projects; the lore itself keeps no list of them):
+
+   ```markdown
+   ## Knowledge Base
+   This project has a knowledge base (a lore) at `$LORE`. It is the source of truth: you MUST consult it first, via the `lore` skill, before answering any domain question.
+   ```

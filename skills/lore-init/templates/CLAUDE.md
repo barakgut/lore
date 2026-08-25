@@ -76,4 +76,4 @@ If this lore was created with `--no-git` it is not a repository: do the work, sk
 
 ## Operations
 
-`/lore:lore-ingest` — process new or changed `raw/` files into the wiki. `/lore:lore-lint` — health check. `/lore:lore-link` — point a project at this lore.
+`/lore:lore-ingest` — process new or changed `raw/` files into the wiki. `/lore:lore-lint` — health check.

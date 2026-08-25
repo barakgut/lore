@@ -1,6 +1,6 @@
 ---
 name: lore
-description: Use when answering any domain or knowledge question in a project linked to the lore (its CLAUDE.md contains a "lore:start" pointer block), and as the shared contract for all lore-* skills. Defines the lore folder layout, page schema, retrieval ladder, and citation rules.
+description: Use when answering any domain or knowledge question in a project linked to a lore (its CLAUDE.md has a "## Knowledge Base" section naming the lore path), and as the shared contract for all lore-* skills. Defines the lore folder layout, page schema, retrieval ladder, and citation rules.
 ---
 
 # The Lore — Core Contract
@@ -11,16 +11,16 @@ Resolve `$LORE` with these rungs, first match wins. Never guess, never scan the 
 
 1. **A path in the user's message** — e.g. `/lore:lore-ingest ~/wikis/hardware`.
 2. **cwd is a lore** — `[ -f ./index.md ] && [ -d ./raw ] && [ -d ./wiki ]`. Use cwd.
-3. **The project's link block** — the `<!-- lore:start -->` block in the project's `CLAUDE.md` names a path. It is usually already in context; otherwise read `./CLAUDE.md`.
+3. **The project's `## Knowledge Base` section** — the project's `CLAUDE.md` has a `## Knowledge Base` heading whose text names the lore path. It is usually already in context; otherwise read `./CLAUDE.md`.
 4. **Nothing matched** — STOP. Tell the user, verbatim:
 
-   > No lore found. `cd` into a lore, pass its path (`/lore:lore-ingest <path>`), or run `/lore:lore-link <path>` in this project.
+   > No lore found. `cd` into a lore, pass its path (`/lore:lore-ingest <path>`), or add a `## Knowledge Base` section naming the lore path to this project's `CLAUDE.md` (snippet in the plugin README and in the `/lore:lore-init` report).
 
 Rung 2 needs all three of `index.md`, `raw/`, and `wiki/` — it fires on whatever directory the user happens to be in, and a lone `index.md` is a common filename. Rungs 1 and 3 need only `index.md`, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
 
-If a rung matches but the path has no `index.md`, STOP and name the bad path — **never fall through** to the next rung. A stale `lore:start` block must be reported (suggest re-running `/lore:lore-link <path>`), not silently bypassed.
+If a rung matches but the path has no `index.md`, STOP and name the bad path — **never fall through** to the next rung. A stale `## Knowledge Base` path must be reported (suggest fixing the path in that section), not silently bypassed.
 
-Rungs 2 and 3 cannot both match: a lore's own `CLAUDE.md` is its schema and never carries a `lore:start` marker.
+Rungs 2 and 3 cannot both match: a lore's own `CLAUDE.md` is its schema and never carries a `## Knowledge Base` section.
 
 Then read `<lore>/CLAUDE.md` — the lore's schema. The rules below are the defaults every new lore is seeded with; where the lore's CLAUDE.md differs (the user evolves it over time), the lore's CLAUDE.md wins.
 

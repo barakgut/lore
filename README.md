@@ -78,8 +78,14 @@ below should be offered.
     /lore:lore-init [path] [--no-git]   # once — creates the lore (default ~/lore); git-inits it unless --no-git
     # drop files into <lore>/raw/   (PDF, images, xlsx/csv, md, txt, saved HTML)
     cd <lore> && /lore:lore-ingest      # distill new raw files into the wiki
-    /lore:lore-link <path>              # once per project — point it at the lore
+    # paste the ## Knowledge Base block below into each project's CLAUDE.md
     /lore:lore-lint                     # periodic health check (after ~5 ingests or monthly)
+
+To link a project, add this to its `CLAUDE.md` (init prints it with the real
+path filled in):
+
+    ## Knowledge Base
+    This project has a knowledge base (a lore) at `<LORE_PATH>`. It is the source of truth: you MUST consult it first, via the `lore` skill, before answering any domain question.
 
 Then just ask questions in linked projects; answers cite their sources.
 
@@ -92,10 +98,10 @@ explicitly once (`/lore:lore-ingest spec.pdf`) to start tracking it.
 
 A lore is self-describing — nothing about it is stored anywhere else. Commands
 find it in this order: a path you name (`/lore:lore-ingest ~/wikis/hardware`),
-the folder you are standing in, or the `lore:start` block that
-`/lore:lore-link` wrote into a project's `CLAUDE.md`. If none of those apply the
-command stops and says so rather than guessing at your notes. Moved a lore?
-Re-run `/lore:lore-link <new-path>` in the projects that point at it.
+the folder you are standing in, or the `## Knowledge Base` section in the
+project's `CLAUDE.md`. If none of those apply the command stops and says so
+rather than guessing at your notes. Moved a lore? Update the path in that
+section in the projects that point at it.
 
 Because nothing is global, you can keep as many separate lores as you like — one
 per domain, per client, per machine.

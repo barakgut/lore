@@ -5,7 +5,7 @@ description: Use when the user runs /lore:lore-lint — health-check the lore fo
 
 # /lore:lore-lint
 
-Follow the `lore` skill for all conventions — including its **Finding the lore** ladder, which resolves `$LORE` (a path in the user's message, else cwd if it is a lore, else the project's `lore:start` block, else hard fail). Then read `$LORE/CLAUDE.md` — where it differs from these defaults, it wins.
+Follow the `lore` skill for all conventions — including its **Finding the lore** ladder, which resolves `$LORE` (a path in the user's message, else cwd if it is a lore, else the project's `## Knowledge Base` section, else hard fail). Then read `$LORE/CLAUDE.md` — where it differs from these defaults, it wins.
 
 ## Checks
 
