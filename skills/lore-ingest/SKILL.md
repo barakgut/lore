@@ -54,7 +54,7 @@ PY
 
 **Re-ingest:** if the user names a specific file, process it regardless of the ledger and append a fresh `ingest` entry — that is how a page written under a limitation (e.g. a `card` written while openpyxl was absent) gets upgraded. The fresh entry records the current hash, so the ledger's latest-entry-wins rule resets cleanly.
 
-**Existing notes:** also treat any `$LORE/wiki/*.md` with no YAML frontmatter as new — add frontmatter (`group` included) and an `ingest` log entry (§9 bootstrapping: notes copied in from a prior system). The index picks the page up when it is regenerated.
+**Existing notes:** also treat any `$LORE/wiki/*.md` with no YAML frontmatter as new — add frontmatter (`group` included) and an `ingest` log entry (bootstrapping: notes copied in from a prior system). The index picks the page up when it is regenerated.
 
 If nothing is NEW or CHANGED: report "nothing to ingest" and stop (no commit).
 
