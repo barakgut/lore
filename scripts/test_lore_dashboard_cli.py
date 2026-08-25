@@ -68,6 +68,25 @@ class TestHrefFor(unittest.TestCase):
         self.assertEqual(href_for("raw", "spec#1.pdf"), "raw/spec%231.pdf")
         self.assertEqual(href_for("raw", "100%done.pdf"), "raw/100%25done.pdf")
 
+    def test_a_leading_double_slash_never_produces_a_protocol_relative_href(self):
+        # quote() leaves "//" alone (its default safe set is "/"), so with the
+        # "." prefix — the default, dashboard written inside the lore — a
+        # frontmatter `resource: "//host/x.pdf"` used to reach the DOM as a
+        # live protocol-relative link to that host. It must stay a path.
+        from lore_dashboard import href_for
+        self.assertEqual(href_for(".", "//evil.example.com/p.pdf"),
+                         ".///evil.example.com/p.pdf")
+        self.assertFalse(href_for(".", "//evil.example.com/p.pdf").startswith("//"))
+        # A single leading slash is an ordinary absolute path, untouched.
+        self.assertEqual(href_for(".", "/notes/spec.pdf"), "/notes/spec.pdf")
+
+    def test_a_protocol_relative_resource_reaches_the_payload_as_a_path(self):
+        lore = build_lore({"A.md": "---\ntype: concept\ntitle: A\ndescription: d\ntags: [x]\n"
+                                   "sources:\n  - id: s\n    resource: \"//evil.example.com/p.pdf\"\n"
+                                   "---\n\nbody\n"})
+        source = build_payload(lore, lore, TODAY)["pages"][0]["sources"][0]
+        self.assertFalse(source["href"].startswith("//"), source["href"])
+
 
 class TestBuildPayload(unittest.TestCase):
     def test_pages_carry_relative_hrefs_and_absolute_paths(self):

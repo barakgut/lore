@@ -24,8 +24,13 @@ const ALLOWED_HREF_SCHEMES = new Set(["http", "https", "mailto"]);
 // invented. Whitespace and control characters are stripped and the scheme is
 // lowercased before the check, so "java\tscript:" and a leading "\x00" still
 // fail closed. Returns null (a non-link) for anything not on the allowlist.
+// A leading "//" is rejected too: it carries no scheme of its own, so the
+// scheme check below would wave it through, but it is a protocol-relative
+// URL rather than a relative path — it inherits the page's scheme and points
+// at a remote host, which is never something a lore page legitimately needs.
 function safeHref(href) {
   const normalized = String(href).replace(/[\s\u0000-\u001f]+/g, "").toLowerCase();
+  if (normalized.startsWith("//")) return null;     // protocol-relative, not relative
   const match = normalized.match(HREF_SCHEME_RE);
   if (!match) return href;                    // no scheme: relative or fragment href
   return ALLOWED_HREF_SCHEMES.has(match[1]) ? href : null;

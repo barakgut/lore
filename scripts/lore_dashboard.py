@@ -58,7 +58,11 @@ def link_prefixes(lore, out_dir):
 def href_for(prefix, relative_path):
     """Percent-encoded href: `prefix` (from link_prefixes) joined with a path
     relative to whatever `prefix` is rooted at."""
-    return quote(relative_path) if prefix == "." else f"{prefix}/{quote(relative_path)}"
+    href = quote(relative_path) if prefix == "." else f"{prefix}/{quote(relative_path)}"
+    # quote() leaves a leading "//" intact, and a href starting "//" is a
+    # protocol-relative URL pointing at a remote host, not a relative path —
+    # "./" in front keeps a frontmatter resource like "//host/x.pdf" a path.
+    return f"./{href}" if href.startswith("//") else href
 
 
 def build_payload(lore, out_dir, today):

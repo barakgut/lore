@@ -151,9 +151,16 @@ SAFE_HREF_CASES = [
     ("data:text/html,<script>alert(1)</script>", None),
     ("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", None),
     ("blob:http://example.com/uuid", None),
+    # blocked: protocol-relative URLs. They carry no scheme of their own, so
+    # the scheme allowlist never sees them, but they are not relative paths
+    # either — they inherit the page's scheme and reach a remote host.
+    ("//evil.example.com/p.pdf", None),
+    (" //evil.example.com/p.pdf", None),
+    ("/\t/evil.example.com/p.pdf", None),
     # allowed: what a real lore page actually links to
     ("../wiki/Some_Page.md", "../wiki/Some_Page.md"),
     ("raw/spec.pdf", "raw/spec.pdf"),
+    ("/absolute/path.md", "/absolute/path.md"),   # one slash is a path, two is a host
     ("#page/Some_Page", "#page/Some_Page"),
     ("https://example.com", "https://example.com"),
     ("mailto:someone@example.com", "mailto:someone@example.com"),
