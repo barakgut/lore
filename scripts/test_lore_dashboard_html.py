@@ -65,7 +65,13 @@ class TestBuildHtml(unittest.TestCase):
 
     def test_output_is_self_contained(self):
         page = build_html(PAYLOAD)
-        self.assertNotIn("http://", page)
+        # The SVG namespace identifier ("http://www.w3.org/2000/svg", required
+        # by document.createElementNS in core.js's svgEl helper) is the one
+        # "http://" string allowed anywhere in the build — it is an XML
+        # namespace name, never fetched. Every other occurrence of "http://"
+        # would be a real reference the self-contained build must not have,
+        # so count them against each other instead of just asserting absence.
+        self.assertEqual(page.count("http://www.w3.org/2000/svg"), page.count("http://"))
         self.assertNotIn("https://", page)
         self.assertNotIn("<link", page)
 
@@ -561,6 +567,192 @@ class TestSearchEngine(unittest.TestCase):
         # inside text/mark nodes, never inside anything that could be
         # parsed as markup, and nothing was dropped or altered.
         self.assertEqual("".join(n["text"] for n in nodes), text)
+
+
+class TestHealthAndStatsViews(unittest.TestCase):
+    def test_both_views_are_registered(self):
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertIn('defineView("health"', source)
+        self.assertIn('defineView("stats"', source)
+
+    def test_bars_are_inline_svg_from_core(self):
+        core = (ASSETS_DIR / "core.js").read_text(encoding="utf-8")
+        self.assertIn("http://www.w3.org/2000/svg", core)
+        self.assertIn("function bar(", core)
+
+    def test_no_chart_library_is_referenced(self):
+        for name in JS_ASSETS:
+            source = (ASSETS_DIR / name).read_text(encoding="utf-8")
+            for library in ["d3", "chart.js", "plotly", "echarts"]:
+                self.assertNotIn(library, source.lower())
+
+
+# bar(fraction, options) is a pure function of its arguments — the geometry
+# it hands back (clamped rect width, threshold-picked colour) is exactly
+# what a source-text assertion cannot pin. Loaded and called for real in
+# node, with document.createElementNS stubbed to a plain recording object
+# (svgEl has no other DOM dependency). Every expected value below is
+# hand-derived from the stated formula — filled = clamp01(fraction) * width,
+# colour by fraction >= 0.9 / >= 0.6 / else — and cross-checked by actually
+# running bar() against these inputs, never guessed digit-by-digit for the
+# floating-point cases (0.9 * 160 and 0.6 * 160 both land on an exact
+# integer in IEEE 754 double, confirmed by that run: 144 and 96).
+BAR_RUNNER_JS = """
+const fs = require("fs");
+function makeSvgNode(tag) {
+  return {
+    tag: tag, attrs: {}, children: [],
+    setAttribute(key, value) { this.attrs[key] = value; },
+    append(...kids) { for (const k of kids) this.children.push(k); },
+  };
+}
+global.document = {
+  getElementById: () => ({ textContent: JSON.stringify({ pages: [] }) }),
+  createElementNS: (ns, tag) => makeSvgNode(tag),
+};
+const src = fs.readFileSync(process.argv[2], "utf8");
+(0, eval)(src);
+const cases = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+function serialize(node) {
+  return { tag: node.tag, attrs: node.attrs, children: node.children.map(serialize) };
+}
+const out = cases.map(c => serialize(bar(c.fraction, c.options)));
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _bar_svg(width, height, aria_label, track_width, filled_width, colour):
+    return {
+        "tag": "svg",
+        "attrs": {"width": width, "height": height, "class": "bar",
+                  "role": "img", "aria-label": aria_label},
+        "children": [
+            {"tag": "rect", "attrs": {"x": 0, "y": 0, "width": track_width, "height": height,
+                                       "rx": 4, "fill": "var(--surface-3)"}, "children": []},
+            {"tag": "rect", "attrs": {"x": 0, "y": 0, "width": filled_width, "height": height,
+                                       "rx": 4, "fill": colour}, "children": []},
+        ],
+    }
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed — bar geometry check skipped")
+class TestBarGeometry(unittest.TestCase):
+    def test_bar_geometry_is_pinned_including_boundaries_and_out_of_range(self):
+        cases = [
+            {"fraction": 0, "options": None},
+            {"fraction": 1, "options": None},
+            {"fraction": 2, "options": None},   # above 1 — must not overflow the track
+            {"fraction": -1, "options": None},  # below 0 — must not go negative
+            {"fraction": 0.9, "options": None},   # colour threshold: >= 0.9 is "good"
+            {"fraction": 0.6, "options": None},   # colour threshold: >= 0.6 (and < 0.9) is "warn"
+            {"fraction": 0.5, "options": {"width": 200, "height": 10, "color": "#ffffff"}},
+        ]
+        expected = [
+            _bar_svg(160, 8, "0%", 160, 0, "var(--bad)"),
+            _bar_svg(160, 8, "100%", 160, 160, "var(--good)"),
+            # fraction=2: aria-label reflects the raw (unclamped) fmtPct(2) = "200%",
+            # but the visual fill is clamped to the track width, not overflowing it.
+            _bar_svg(160, 8, "200%", 160, 160, "var(--good)"),
+            # fraction=-1: aria-label is fmtPct(-1) = "-100%", but the fill clamps to 0,
+            # never negative.
+            _bar_svg(160, 8, "-100%", 160, 0, "var(--bad)"),
+            _bar_svg(160, 8, "90%", 160, 144, "var(--good)"),
+            _bar_svg(160, 8, "60%", 160, 96, "var(--warn)"),
+            # explicit options.color overrides the threshold colour entirely.
+            _bar_svg(200, 10, "50%", 200, 100, "#ffffff"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_bar.js"
+            cases_path = Path(tmp) / "cases.json"
+            runner.write_text(BAR_RUNNER_JS, encoding="utf-8")
+            cases_path.write_text(json.dumps(cases), encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "core.js"), str(cases_path)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), expected)
+
+
+# offenderNode(offender) is the branch that decides how a Health-tab
+# offender renders: a "page" offender becomes a pageLink(...) call, a "raw"
+# offender becomes a plain "#inbox" link, and everything else — including a
+# "page" offender whose ref does NOT match any page in the payload (a dead
+# wikilink target, or any other id the health checks can name without it
+# backing a real page record) — must fall through to inert text. Routing
+# that case to pageLink would build a link into renderPage() for an id with
+# no matching page: a silently empty "No page with id ..." view. This is
+# executed for real in node with pageById/pageLink/el stubbed (el as a
+# plain recording object, matching the existing highlight() test pattern)
+# so the assertion is "pageLink was never called for the unmatched ref",
+# not a source-text guess about which branch runs.
+OFFENDER_RUNNER_JS = """
+const fs = require("fs");
+global.defineView = () => {};
+const pageLinkCalls = [];
+global.pageById = (id) => (id === "known" ? { id: "known", title: "Known Page" } : null);
+global.pageLink = (id) => { pageLinkCalls.push(id); return { kind: "pageLink", id: id }; };
+global.el = (tag, attrs, children) => ({
+  kind: "el", tag: tag,
+  class: (attrs && attrs.class) || null,
+  text: (attrs && attrs.text) || null,
+  href: (attrs && attrs.href) || null,
+  children: [].concat(children || []),
+});
+const src = fs.readFileSync(process.argv[2], "utf8");
+(0, eval)(src);
+const offenders = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const nodes = offenders.map(offenderNode);
+process.stdout.write(JSON.stringify({ nodes: nodes, pageLinkCalls: pageLinkCalls }));
+"""
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed — offender rendering check skipped")
+class TestOffenderRendering(unittest.TestCase):
+    def _render(self, offenders):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp) / "run_offender.js"
+            cases_path = Path(tmp) / "offenders.json"
+            runner.write_text(OFFENDER_RUNNER_JS, encoding="utf-8")
+            cases_path.write_text(json.dumps(offenders), encoding="utf-8")
+            result = subprocess.run(
+                ["node", str(runner), str(ASSETS_DIR / "views.js"), str(cases_path)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_page_offender_with_known_ref_links_via_pagelink(self):
+        out = self._render([{"ref": "known", "kind": "page", "detail": "dead wikilinks: x"}])
+        self.assertEqual(out["pageLinkCalls"], ["known"])
+        [node] = out["nodes"]
+        self.assertEqual(node["tag"], "li")
+        self.assertEqual(node["children"][0], {"kind": "pageLink", "id": "known"})
+        self.assertEqual(node["children"][1]["text"], " — dead wikilinks: x")
+
+    def test_page_offender_with_unmatched_ref_renders_as_inert_text_not_a_dead_link(self):
+        # ref "ghost" has no matching page (pageById returns null) — this
+        # must NOT call pageLink and must NOT produce a link into an empty
+        # page view.
+        out = self._render([{"ref": "ghost", "kind": "page", "detail": "dead wikilinks: y"}])
+        self.assertEqual(out["pageLinkCalls"], [])
+        [node] = out["nodes"]
+        self.assertEqual(node, {"kind": "el", "tag": "li", "class": "muted",
+                                "text": "ghost — dead wikilinks: y", "href": None, "children": []})
+
+    def test_raw_offender_links_to_inbox_not_a_page_route(self):
+        out = self._render([{"ref": "notes.pdf", "kind": "raw", "detail": "new"}])
+        self.assertEqual(out["pageLinkCalls"], [])
+        [node] = out["nodes"]
+        self.assertEqual(node["tag"], "li")
+        link = node["children"][0]
+        self.assertEqual((link["tag"], link["href"], link["text"]), ("a", "#inbox", "notes.pdf"))
+
+    def test_other_kind_offender_renders_as_plain_text(self):
+        out = self._render([{"ref": "index.md", "kind": "lore", "detail": "3 lines over target"}])
+        self.assertEqual(out["pageLinkCalls"], [])
+        [node] = out["nodes"]
+        self.assertEqual(node, {"kind": "el", "tag": "li", "class": "muted",
+                                "text": "index.md — 3 lines over target", "href": None,
+                                "children": []})
 
 
 if __name__ == "__main__":

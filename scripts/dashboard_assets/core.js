@@ -49,3 +49,28 @@ function table(headers, rows) {
                           el("tbody", {}, rows.map(cells => el("tr", {}, cells.map(
                             cell => el("td", {}, cell)))))]);
 }
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs, children) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined) continue;
+    node.setAttribute(key, value);
+  }
+  for (const child of [].concat(children || [])) if (child) node.append(child);
+  return node;
+}
+
+function bar(fraction, options) {
+  const opts = options || {};
+  const width = opts.width || 160, height = opts.height || 8;
+  const filled = Math.max(0, Math.min(1, Number(fraction) || 0)) * width;
+  const colour = opts.color || (fraction >= 0.9 ? "var(--good)"
+                                : fraction >= 0.6 ? "var(--warn)" : "var(--bad)");
+  return svgEl("svg", { width: width, height: height, class: "bar",
+                        role: "img", "aria-label": fmtPct(fraction) }, [
+    svgEl("rect", { x: 0, y: 0, width: width, height: height, rx: 4, fill: "var(--surface-3)" }),
+    svgEl("rect", { x: 0, y: 0, width: filled, height: height, rx: 4, fill: colour }),
+  ]);
+}

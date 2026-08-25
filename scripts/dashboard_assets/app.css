@@ -96,3 +96,10 @@ sup.fn.dead a { color: var(--bad); }
 .results .badge { margin-left: 8px; }
 .snippet { font-size: 13px; }
 mark { background: rgba(57,135,229,0.35); color: var(--ink); border-radius: 2px; }
+
+.score { display: flex; gap: 14px; align-items: baseline; margin-bottom: 20px; }
+.score-n { font-size: 40px; font-weight: 700; }
+.dimension { border-top: 1px solid var(--hairline); padding: 12px 0; }
+.dim-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.check > summary { cursor: pointer; padding: 4px 0; }
+.bar { vertical-align: middle; }

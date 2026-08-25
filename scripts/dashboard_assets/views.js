@@ -189,3 +189,138 @@ function renderSearch() {
 }
 
 defineView("search", "Search", renderSearch);
+
+function offenderNode(offender) {
+  const label = offender.ref + (offender.detail ? " — " + offender.detail : "");
+  if (offender.kind === "page" && pageById(offender.ref)) {
+    return el("li", {}, [pageLink(offender.ref),
+                         el("span", { class: "muted", text: " — " + offender.detail })]);
+  }
+  if (offender.kind === "raw") {
+    return el("li", {}, [el("a", { href: "#inbox", text: offender.ref }),
+                         el("span", { class: "muted", text: " — " + offender.detail })]);
+  }
+  return el("li", { class: "muted", text: label });
+}
+
+function checkRow(check) {
+  return el("details", { class: "check" }, [
+    el("summary", {}, [
+      el("span", { text: check.label }),
+      el("span", { class: "muted", text: "  " + check.offenders.length + " offender(s) · "
+                                         + fmtPct(check.score) }),
+    ]),
+    el("ul", { class: "linklist" }, check.offenders.map(offenderNode)),
+  ]);
+}
+
+function dimensionCard(dimension) {
+  const failing = dimension.checks.filter(check => check.score < 1);
+  const clean = dimension.checks.length - failing.length;
+  return el("section", { class: "dimension" }, [
+    el("div", { class: "dim-head" }, [
+      el("strong", { text: dimension.label }),
+      el("span", { class: "muted", text: "weight " + dimension.weight }),
+      bar(dimension.score, { width: 200 }),
+      el("span", { text: fmtPct(dimension.score) }),
+    ]),
+    failing.length
+      ? el("div", {}, failing.map(checkRow))
+      : el("p", { class: "empty", text: "All " + dimension.checks.length + " checks clean." }),
+    clean && failing.length
+      ? el("p", { class: "muted", text: clean + " other check(s) clean." })
+      : null,
+  ]);
+}
+
+function renderHealth() {
+  const lint = LORE.health.last_lint;
+  return el("section", {}, [
+    el("div", { class: "score" }, [
+      el("div", { class: "score-n", text: String(LORE.health.score) }),
+      el("div", { class: "muted", text: "/ 100 — mechanical health" }),
+      bar(LORE.health.score / 100, { width: 260, height: 10 }),
+    ]),
+    el("div", {}, LORE.health.dimensions.map(dimensionCard)),
+    el("h2", { text: "Judgment checks (not scored)" }),
+    el("p", { class: "muted", text: lint
+      ? "Last lint " + lint.date + " (" + lint.days + " days ago): "
+        + lint.fixed + " fixed, " + lint.reported + " reported."
+      : "No lint entry in log.md yet — run /lore:lore-lint." }),
+    el("p", { class: "muted", text:
+      "Active contradiction cross-check, footnote-discipline judgment, missing concept pages, "
+      + "missing cross-references, knowledge gaps and discard candidates need the agent; "
+      + "they are never computed here." }),
+  ]);
+}
+
+defineView("health", "Health", renderHealth);
+
+function countTable(title, rows, options) {
+  const opts = options || {};
+  if (!rows.length) return el("div", {}, [el("h3", { text: title }),
+                                          el("p", { class: "empty", text: "Nothing to show." })]);
+  const max = Math.max(...rows.map(row => row.count));
+  const body = rows.map(row => el("tr", {}, [
+    el("td", {}, opts.chip ? [el("button", {
+      class: "badge tag", type: "button",
+      onclick: () => { window.LORE_QUERY = "tag:" + row.key; navigate("#search"); },
+    }, row.key)] : [el("span", { text: row.key })]),
+    el("td", { text: String(row.count) }),
+    el("td", {}, [bar(row.count / max, { width: 120, color: "var(--accent)" })]),
+    opts.bytes ? el("td", { text: fmtBytes(row.bytes || 0) }) : null,
+  ].filter(Boolean)));
+  const headers = ["", "count", ""].concat(opts.bytes ? ["size"] : []);
+  return el("div", {}, [
+    el("h3", { text: title }),
+    el("table", {}, [el("thead", {}, el("tr", {}, headers.map(h => el("th", { text: h })))),
+                     el("tbody", {}, body)]),
+  ]);
+}
+
+function renderStats() {
+  const stats = LORE.stats;
+  const coverage = stats.coverage;
+  const graph = stats.graph;
+  return el("section", {}, [
+    el("h2", { text: "Pages" }),
+    countTable("By type", stats.pages_by_type),
+    countTable("By status", stats.pages_by_status),
+    countTable("By generator", stats.pages_by_generator),
+    el("h2", { text: "Inbox" }),
+    countTable("By extension", stats.raw_by_ext, { bytes: true }),
+    countTable("By state", stats.raw_by_state),
+    el("p", { class: "muted", text: "Total raw bytes: " + fmtBytes(stats.raw_total_bytes) }),
+    el("h2", { text: "Sources coverage" }),
+    el("p", {}, [el("span", { text: coverage.raw_with_pages + " raw file(s) feed at least one page; " }),
+                 el("span", { class: coverage.raw_without_pages ? "dead" : "muted",
+                              text: coverage.raw_without_pages + " feed none." })]),
+    countTable("Pages per raw file (top 10)",
+               coverage.pages_per_raw.map(row => ({ key: row.file, count: row.count }))),
+    coverage.uncited.length
+      ? el("p", { class: "muted", text: "Uncited: " + coverage.uncited.join(", ") })
+      : null,
+    el("h2", { text: "Graph" }),
+    el("div", { class: "cards" }, [
+      ["Nodes", graph.nodes], ["Pages", graph.pages], ["Missing", graph.ghosts],
+      ["Edges", graph.edges], ["Avg degree", graph.avg_degree], ["Components", graph.components],
+    ].map(([label, value]) => el("div", { class: "card" }, [
+      el("div", { class: "n", text: String(value) }), el("div", { class: "k", text: label })]))),
+    countTable("Top hubs by inbound links",
+               graph.hubs.map(hub => ({ key: hub.title, count: hub.count }))),
+    el("h2", { text: "Tags" }),
+    countTable("By tag", stats.tags, { chip: true }),
+    stats.untagged.length
+      ? el("p", { class: "muted", text: "Untagged pages: " + stats.untagged.join(", ") })
+      : el("p", { class: "muted", text: "Every page is tagged." }),
+    el("h2", { text: "Log" }),
+    countTable("Entries by verb", stats.log.by_verb),
+    countTable("Ingests per week",
+               stats.log.ingests_per_week.map(row => ({ key: row.week, count: row.count }))),
+    el("p", { class: "muted", text: stats.log.answers + " answer(s) promoted · "
+                                    + stats.log.discards + " discard(s) · "
+                                    + stats.log.malformed + " malformed line(s)" }),
+  ]);
+}
+
+defineView("stats", "Stats", renderStats);
