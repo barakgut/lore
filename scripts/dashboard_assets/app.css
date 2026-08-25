@@ -50,6 +50,7 @@ tbody tr:hover { background: var(--surface-2); }
 .badge.NEW, .badge.draft { border-color: var(--warn); color: var(--warn); }
 .badge.CHANGED, .badge.deprecated { border-color: var(--bad); color: var(--bad); }
 .badge.PROCESSED, .badge.stable { border-color: var(--good); color: var(--good); }
+.badge.SKIPPED { border-color: var(--muted); color: var(--muted); }
 .tag { cursor: pointer; }
 .empty { color: var(--muted); font-style: italic; }
 .copy { border: none; background: none; color: var(--muted); padding: 0 4px; cursor: pointer; }

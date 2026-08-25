@@ -587,6 +587,18 @@ class TestHealthAndStatsViews(unittest.TestCase):
                 self.assertNotIn(library, source.lower())
 
 
+class TestLogAndInboxViews(unittest.TestCase):
+    def test_both_views_are_registered(self):
+        source = (ASSETS_DIR / "views.js").read_text(encoding="utf-8")
+        self.assertIn('defineView("log"', source)
+        self.assertIn('defineView("inbox"', source)
+
+    def test_state_badge_styles_exist_for_every_ledger_state(self):
+        css = (ASSETS_DIR / "app.css").read_text(encoding="utf-8")
+        for state in ["NEW", "CHANGED", "PROCESSED", "SKIPPED"]:
+            self.assertIn(".badge." + state, css)
+
+
 # bar(fraction, options) is a pure function of its arguments — the geometry
 # it hands back (clamped rect width, threshold-picked colour) is exactly
 # what a source-text assertion cannot pin. Loaded and called for real in
@@ -795,10 +807,23 @@ global.document = {
 };
 global.window = { location: { hash: "" }, LORE_QUERY: undefined };
 global.navigator = { clipboard: null };
+// renderLog()'s filter controls call route() to re-render the current tab
+// in place, the way app.js wires up every filter; this harness never
+// loads app.js, so route is stubbed inert here — tests instead re-render
+// by calling renderLog() again directly after firing a control's
+// listener, which is exactly what route() itself would do.
+global.route = function () {};
 
 const coreSrc = fs.readFileSync(process.argv[2], "utf8");
 const viewsSrc = fs.readFileSync(process.argv[3], "utf8");
-(0, eval)(coreSrc + "\\n" + viewsSrc);
+// Declared with `function`, not `const`, so indirect eval hoists it onto
+// the global object the same way renderHealth/renderStats below are —
+// closing over the same LORE binding those functions do, purely so this
+// script can read LORE.log.entries back afterwards and confirm that
+// exercising the log view's filters never mutates the payload's own array.
+const introspectionSrc =
+  "function __logEntryLines(){ return LORE.log.entries.map(function(e){ return e.line; }); }";
+(0, eval)(coreSrc + "\\n" + viewsSrc + "\\n" + introspectionSrc);
 
 function findButton(node, label) {
   if (!node || node.nodeType !== 1) return null;
@@ -832,11 +857,32 @@ const chip = findButton(statsNode, "foo");
 if (chip && chip.listeners.click) chip.listeners.click();
 const tagClick = { loreQuery: window.LORE_QUERY, hash: window.location.hash };
 
+const beforeFilterLines = __logEntryLines();
+const logNode = renderLog();
+const inboxNode = renderInbox();
+
+// Drive the date filters the way a person would: pull the live (not yet
+// serialised) <input> elements out of the filters row and fire their
+// change listeners, then re-render — exactly what route() does on a real
+// change event in the browser.
+const filtersRow = logNode.children[0];
+const [verbSelect, fromInput, toInput, textInput] = filtersRow.children;
+fromInput.listeners.change({ target: { value: "2026-02-01" } });
+toInput.listeners.change({ target: { value: "2026-03-10" } });
+const logAfterDateFilter = renderLog();
+
+const afterFilterLines = __logEntryLines();
+
 process.stdout.write(JSON.stringify({
   health: serialize(healthNode),
   stats: serialize(statsNode),
   chipFound: !!chip,
   tagClick: tagClick,
+  log: serialize(logNode),
+  inbox: serialize(inboxNode),
+  logAfterDateFilter: serialize(logAfterDateFilter),
+  logEntryLinesBefore: beforeFilterLines,
+  logEntryLinesAfter: afterFilterLines,
 }));
 """
 
@@ -849,7 +895,7 @@ process.stdout.write(JSON.stringify({
 # scaling by hand; pages_by_generator is deliberately empty to exercise
 # countTable's "Nothing to show." fallback; tags includes "foo" to click.
 RENDERED_VIEWS_PAYLOAD = {
-    "pages": [{"id": "concept-a", "title": "Concept A"}],
+    "pages": [{"id": "concept-a", "title": "Concept A"}, {"id": "Wiki_Page", "title": "Wiki Page"}],
     "health": {
         "score": 78,
         "last_lint": {"date": "2026-08-10", "fixed": 4, "reported": 2, "days": 14},
@@ -916,7 +962,72 @@ RENDERED_VIEWS_PAYLOAD = {
             "answers": 1, "discards": 0, "entries": 6, "malformed": 0,
         },
     },
+    # LORE.log entries are supplied newest-first, exactly as parse_log()
+    # sorts them (by (date, line) descending) — renderLog() must never
+    # re-sort. The six entries below exercise, in order:
+    #   1. "answer | Wiki Page" — subject with a space that maps (via
+    #      s/ /_/) to the page id "Wiki_Page" above: the page-link branch.
+    #   2. "skip | spec.pdf" — LORE.raw below has only "v2_spec.pdf", never
+    #      an exact "spec.pdf" record; "spec.pdf" occurs *inside*
+    #      "v2_spec.pdf" as a substring, so this pins the ledger's
+    #      exact-basename-only matching rule and must fall through to
+    #      plain text, not link to v2_spec.pdf.
+    #   3. "ingest | Totally Unknown Thing" — matches neither a page nor a
+    #      raw record at all: the third subjectNode() branch.
+    #   4-6. three "notes.txt" ingest/skip entries at 2026-03-01, 2026-02-01
+    #      and 2026-01-01 (newest first, as supplied) — LORE.raw has an
+    #      exact "notes.txt" record (the raw-link branch), and the trio
+    #      pins the per-file ledger's oldest-first inversion of this same
+    #      newest-first order. 2026-02-01 and 2026-03-10 (entries 3 and 5)
+    #      double as the inclusive from/to boundary dates for the
+    #      date-range filter test.
+    "log": {
+        "entries": [
+            {"line": 60, "date": "2026-04-01", "verb": "answer", "subject": "Wiki Page",
+             "detail": "promoted from source review", "sha": None, "fixed": None, "reported": None},
+            {"line": 55, "date": "2026-03-20", "verb": "skip", "subject": "spec.pdf",
+             "detail": "duplicate of v2_spec.pdf", "sha": None, "fixed": None, "reported": None},
+            {"line": 50, "date": "2026-03-10", "verb": "ingest", "subject": "Totally Unknown Thing",
+             "detail": "no matching page or raw file", "sha": None, "fixed": None, "reported": None},
+            {"line": 45, "date": "2026-03-01", "verb": "ingest", "subject": "notes.txt",
+             "detail": "sha256:aaaaaaaaaaaa", "sha": "aaaaaaaaaaaa", "fixed": None, "reported": None},
+            {"line": 40, "date": "2026-02-01", "verb": "skip", "subject": "notes.txt",
+             "detail": "too large to process", "sha": None, "fixed": None, "reported": None},
+            {"line": 35, "date": "2026-01-01", "verb": "ingest", "subject": "notes.txt",
+             "detail": "sha256:bbbbbbbbbbbb", "sha": "bbbbbbbbbbbb", "fixed": None, "reported": None},
+        ],
+        "malformed": [{"line": 12, "text": "## nope missing pipe"}],
+        "last_lint": None,
+    },
+    # Deliberately NOT in NEW/CHANGED/SKIPPED/PROCESSED order and NOT
+    # alphabetical either — renderInbox() must preserve exactly this order
+    # (scan_raw() already put NEW/CHANGED first; the view must not re-sort).
+    "raw": [
+        {"name": "v2_spec.pdf", "ext": ".pdf", "size": 9000, "sha": "ccc111222333",
+         "state": "CHANGED", "latest_date": "2026-03-20", "skip_reason": None, "pages": [],
+         "href": "../raw/v2_spec.pdf", "abs": "/home/u/lore/raw/v2_spec.pdf"},
+        {"name": "notes.txt", "ext": ".txt", "size": 512, "sha": "aaaaaaaaaaaa",
+         "state": "NEW", "latest_date": "2026-03-01", "skip_reason": None, "pages": [],
+         "href": "../raw/notes.txt", "abs": "/home/u/lore/raw/notes.txt"},
+        {"name": "old_batch.md", "ext": ".md", "size": 100, "sha": "dead00dead00",
+         "state": "SKIPPED", "latest_date": "2026-01-01", "skip_reason": "too niche",
+         "pages": [], "href": "../raw/old_batch.md", "abs": "/home/u/lore/raw/old_batch.md"},
+        {"name": "chart.xlsx", "ext": ".xlsx", "size": 30000, "sha": "eee444555666",
+         "state": "NEW", "latest_date": None, "skip_reason": None, "pages": [],
+         "href": "../raw/chart.xlsx", "abs": "/home/u/lore/raw/chart.xlsx"},
+        {"name": "report.csv", "ext": ".csv", "size": 2048, "sha": "fff777888999",
+         "state": "PROCESSED", "latest_date": "2026-01-05", "skip_reason": None,
+         "pages": ["Wiki_Page"], "href": "../raw/report.csv", "abs": "/home/u/lore/raw/report.csv"},
+    ],
 }
+
+# Same shape, but log.entries/log.malformed/raw are all empty — exercises
+# the "Every heading parses.", "No ingest or skip entries yet." and
+# "raw/ is empty." fallbacks, none of which the non-empty payload above
+# ever takes.
+EMPTY_LOG_PAYLOAD = {**RENDERED_VIEWS_PAYLOAD,
+                     "log": {"entries": [], "malformed": [], "last_lint": None},
+                     "raw": []}
 
 
 def _rv_all_text(node):
@@ -950,17 +1061,38 @@ def _rv_count_table_div(root, title):
     return None
 
 
+def _rv_direct_table_rows(node):
+    """The <tbody> rows of the <table> that is a direct child of `node`."""
+    table = next(c for c in node["children"] if c and c.get("tag") == "table")
+    tbody = next(c for c in table["children"] if c.get("tag") == "tbody")
+    return tbody["children"]
+
+
+def _rv_ledger_groups(log_tree):
+    """{raw filename: [row date, ...]} for each per-file <details class="tree">
+    ledger block under the Log view, in the order its rows render."""
+    groups = {}
+    for details in _rv_find_all(log_tree, lambda n: n.get("tag") == "details"
+                                                      and n.get("class") == "tree"):
+        summary = next(c for c in details["children"] if c.get("tag") == "summary")
+        name = _rv_all_text(summary["children"][0])
+        rows = _rv_direct_table_rows(details)
+        groups[name] = [row["children"][0]["text"] for row in rows]
+    return groups
+
+
 @unittest.skipUnless(shutil.which("node"), "node not installed — rendered-view check skipped")
 class TestRenderedViews(unittest.TestCase):
-    def _render(self):
+    def _render(self, payload=None):
         with tempfile.TemporaryDirectory() as tmp:
             runner = Path(tmp) / "run_rendered_views.js"
-            payload = Path(tmp) / "payload.json"
+            payload_path = Path(tmp) / "payload.json"
             runner.write_text(RENDERED_VIEWS_RUNNER_JS, encoding="utf-8")
-            payload.write_text(json.dumps(RENDERED_VIEWS_PAYLOAD), encoding="utf-8")
+            payload_path.write_text(json.dumps(payload if payload is not None
+                                                else RENDERED_VIEWS_PAYLOAD), encoding="utf-8")
             result = subprocess.run(
                 ["node", str(runner), str(ASSETS_DIR / "core.js"), str(ASSETS_DIR / "views.js"),
-                 str(payload)],
+                 str(payload_path)],
                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -1047,6 +1179,119 @@ class TestRenderedViews(unittest.TestCase):
         out = self._render()
         self.assertTrue(out["chipFound"], "no chip labelled 'foo' was found in the tags table")
         self.assertEqual(out["tagClick"], {"loreQuery": "tag:foo", "hash": "#search"})
+
+    def test_log_table_is_newest_first_and_the_count_line_matches(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["log"])
+        dates = [row["children"][0]["text"] for row in rows]
+        self.assertEqual(dates, ["2026-04-01", "2026-03-20", "2026-03-10",
+                                 "2026-03-01", "2026-02-01", "2026-01-01"])
+        h2 = next(c for c in out["log"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(h2["text"], "6 of 6 entries")
+
+    def test_subject_links_to_a_page_when_the_spaced_subject_matches_a_page_id(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["log"])
+        subject = rows[0]["children"][2]["children"][0]   # "answer | Wiki Page"
+        self.assertEqual(subject["tag"], "a")
+        self.assertEqual(subject["attrs"].get("href"), "#page/Wiki_Page")
+        self.assertEqual(_rv_all_text(subject), "Wiki Page")
+
+    def test_subject_links_to_the_raw_href_on_an_exact_basename_match(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["log"])
+        subject = rows[3]["children"][2]["children"][0]   # "ingest | notes.txt" 2026-03-01
+        self.assertEqual(subject["tag"], "a")
+        self.assertEqual(subject["class"], "mono")
+        self.assertEqual(subject["attrs"].get("href"), "../raw/notes.txt")
+        self.assertEqual(_rv_all_text(subject), "notes.txt")
+
+    def test_subject_matching_never_treats_a_basename_as_a_substring(self):
+        # LORE.raw only has "v2_spec.pdf"; "spec.pdf" occurs inside that
+        # name but a substring-based lookup would wrongly link this cell to
+        # v2_spec.pdf's href. It must fall through to plain, unlinked text.
+        out = self._render()
+        rows = _rv_direct_table_rows(out["log"])
+        subject = rows[1]["children"][2]["children"][0]   # "skip | spec.pdf"
+        self.assertEqual(subject["tag"], "span")
+        self.assertEqual(subject["text"], "spec.pdf")
+
+    def test_subject_matching_neither_page_nor_raw_renders_plain_text(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["log"])
+        subject = rows[2]["children"][2]["children"][0]   # "ingest | Totally Unknown Thing"
+        self.assertEqual(subject["tag"], "span")
+        self.assertEqual(subject["text"], "Totally Unknown Thing")
+
+    def test_malformed_lines_show_raw_text_flagged_with_their_line_number(self):
+        out = self._render()
+        [li] = list(_rv_find_all(out["log"], lambda n: n.get("tag") == "li"
+                                                        and n.get("class") == "mono dead"))
+        self.assertEqual(li["text"], "log.md:12  ## nope missing pipe")
+        headings = [c["text"] for c in out["log"]["children"] if c.get("tag") == "h2"]
+        self.assertIn("Malformed lines (1)", headings)
+
+    def test_no_malformed_lines_and_no_ledger_entries_render_their_fallbacks(self):
+        out = self._render(EMPTY_LOG_PAYLOAD)
+        headings = [c["text"] for c in out["log"]["children"] if c.get("tag") == "h2"]
+        self.assertIn("Malformed lines (0)", headings)
+        fallbacks = [c["text"] for c in out["log"]["children"]
+                     if c.get("tag") == "p" and c.get("class") == "empty"]
+        self.assertIn("Every heading parses.", fallbacks)
+        self.assertIn("No ingest or skip entries yet.", fallbacks)
+
+    def test_per_file_ledger_lists_that_files_entries_oldest_first(self):
+        # The main table above (asserted newest-first, separately) supplies
+        # these same three notes.txt rows in the exact opposite order —
+        # this is the inversion a naive "just reuse the same list" bug
+        # would get backwards.
+        out = self._render()
+        groups = _rv_ledger_groups(out["log"])
+        self.assertEqual(groups["notes.txt"], ["2026-01-01", "2026-02-01", "2026-03-01"])
+
+    def test_date_range_filter_is_inclusive_of_entries_exactly_on_from_and_to(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["logAfterDateFilter"])
+        dates = [row["children"][0]["text"] for row in rows]
+        # from=2026-02-01 is entry 5's own date and to=2026-03-10 is entry
+        # 3's own date — both boundary entries are included; 2026-03-20 and
+        # 2026-01-01, just outside either edge, are excluded.
+        self.assertEqual(dates, ["2026-03-10", "2026-03-01", "2026-02-01"])
+        h2 = next(c for c in out["logAfterDateFilter"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(h2["text"], "3 of 6 entries")
+
+    def test_filtering_the_log_view_never_mutates_the_payloads_entries_array(self):
+        out = self._render()
+        self.assertEqual(out["logEntryLinesBefore"], [60, 55, 50, 45, 40, 35])
+        self.assertEqual(out["logEntryLinesAfter"], out["logEntryLinesBefore"])
+
+    def test_inbox_summary_line_counts_every_state(self):
+        out = self._render()
+        h2 = next(c for c in out["inbox"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(h2["text"], "raw/ — 5 file(s): 2 NEW · 1 CHANGED · 1 SKIPPED · 1 PROCESSED")
+
+    def test_inbox_table_preserves_payload_order_instead_of_resorting(self):
+        out = self._render()
+        rows = _rv_direct_table_rows(out["inbox"])
+        names = [_rv_all_text(next(_rv_find_all(row["children"][0], lambda n: n.get("tag") == "a")))
+                 for row in rows]
+        # Payload order, not alphabetical (chart, notes, old_batch, report,
+        # v2_spec) and not grouped by state.
+        self.assertEqual(names, ["v2_spec.pdf", "notes.txt", "old_batch.md",
+                                 "chart.xlsx", "report.csv"])
+        states = [_rv_all_text(row["children"][3]) for row in rows]
+        self.assertEqual(states, ["CHANGED", "NEW", "SKIPPED", "NEW", "PROCESSED"])
+        skip_reason = rows[2]["children"][6]["text"]
+        self.assertEqual(skip_reason, "too niche")
+        pages_link = next(_rv_find_all(rows[4]["children"][5], lambda n: n.get("tag") == "a"))
+        self.assertEqual(pages_link["attrs"].get("href"), "#page/Wiki_Page")
+
+    def test_empty_raw_renders_its_fallback_and_a_zero_count_summary(self):
+        out = self._render(EMPTY_LOG_PAYLOAD)
+        h2 = next(c for c in out["inbox"]["children"] if c.get("tag") == "h2")
+        self.assertEqual(h2["text"], "raw/ — 0 file(s): empty")
+        fallback = next(c for c in out["inbox"]["children"] if c.get("tag") == "p")
+        self.assertEqual((fallback["class"], fallback["text"]), ("empty", "raw/ is empty."))
 
 
 if __name__ == "__main__":

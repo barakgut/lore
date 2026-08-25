@@ -324,3 +324,115 @@ function renderStats() {
 }
 
 defineView("stats", "Stats", renderStats);
+
+const LOG_FILTERS = { verb: "", from: "", to: "", text: "" };
+
+function subjectNode(entry) {
+  const asPage = pageById(entry.subject.replace(/ /g, "_"));
+  if (asPage) return pageLink(asPage.id, entry.subject);
+  const raw = LORE.raw.find(record => record.name.split("/").pop() === entry.subject);
+  if (raw) return el("a", { href: raw.href, class: "mono" }, entry.subject);
+  return el("span", { text: entry.subject });
+}
+
+function logRows(entries) {
+  return entries.map(entry => el("tr", {}, [
+    el("td", { class: "mono", text: entry.date }),
+    el("td", {}, [el("span", { class: "badge", text: entry.verb })]),
+    el("td", {}, [subjectNode(entry)]),
+    el("td", { class: "muted", text: entry.detail }),
+  ]));
+}
+
+function renderLog() {
+  const rerun = () => route();
+  const verbs = [...new Set(LORE.log.entries.map(entry => entry.verb))].sort();
+  const verbSelect = el("select", { onchange: event => { LOG_FILTERS.verb = event.target.value; rerun(); } },
+    [el("option", { value: "", text: "verb: all" })].concat(verbs.map(verb =>
+      el("option", { value: verb, text: verb, selected: LOG_FILTERS.verb === verb }))));
+  const from = el("input", { type: "date", value: LOG_FILTERS.from, "aria-label": "from",
+                             onchange: event => { LOG_FILTERS.from = event.target.value; rerun(); } });
+  const to = el("input", { type: "date", value: LOG_FILTERS.to, "aria-label": "to",
+                           onchange: event => { LOG_FILTERS.to = event.target.value; rerun(); } });
+  const text = el("input", { type: "search", value: LOG_FILTERS.text, placeholder: "filter text",
+                             oninput: event => { LOG_FILTERS.text = event.target.value; rerun(); } });
+  const needle = LOG_FILTERS.text.toLowerCase();
+  // LORE.log.entries is the payload's own array — .filter() below returns a
+  // new array and leaves it untouched, so re-rendering with different
+  // filters never mutates the newest-first order every other view relies on.
+  const entries = LORE.log.entries.filter(entry =>
+    (!LOG_FILTERS.verb || entry.verb === LOG_FILTERS.verb)
+    && (!LOG_FILTERS.from || entry.date >= LOG_FILTERS.from)
+    && (!LOG_FILTERS.to || entry.date <= LOG_FILTERS.to)
+    && (!needle || (entry.subject + " " + entry.detail).toLowerCase().includes(needle)));
+
+  // ingest/skip headings are log.md's ledger convention (see the lore
+  // schema doc): only those two verbs carry a raw/ filename as their
+  // subject, so only they belong in the per-file ledger below.
+  const ledger = new Map();
+  for (const entry of LORE.log.entries) {
+    if (entry.verb !== "ingest" && entry.verb !== "skip") continue;
+    if (!ledger.has(entry.subject)) ledger.set(entry.subject, []);
+    ledger.get(entry.subject).push(entry);
+  }
+
+  return el("section", {}, [
+    el("div", { class: "filters" }, [verbSelect, from, to, text]),
+    el("h2", { text: entries.length + " of " + LORE.log.entries.length + " entries" }),
+    el("table", {}, [
+      el("thead", {}, el("tr", {}, ["date", "verb", "subject", "detail"].map(h => el("th", { text: h })))),
+      el("tbody", {}, logRows(entries)),
+    ]),
+    el("h2", { text: "Malformed lines (" + LORE.log.malformed.length + ")" }),
+    LORE.log.malformed.length
+      ? el("ul", { class: "linklist" }, LORE.log.malformed.map(bad =>
+          el("li", { class: "mono dead", text: "log.md:" + bad.line + "  " + bad.text })))
+      : el("p", { class: "empty", text: "Every heading parses." }),
+    el("h2", { text: "Per-file ledger" }),
+    ledger.size
+      // LORE.log.entries is newest-first, so entries pushed above while
+      // scanning it in order are newest-first too, per subject; reverse a
+      // *copy* (items is this loop's own array, never the payload's) to get
+      // the oldest-first order the ledger convention calls for.
+      ? el("div", {}, [...ledger.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(
+          ([name, items]) => el("details", { class: "tree" }, [
+            el("summary", {}, [el("span", { class: "mono", text: name }),
+                               el("span", { class: "muted", text: "  " + items.length + " entry(ies)" })]),
+            el("table", {}, [el("tbody", {}, logRows([...items].reverse()))]),
+          ])))
+      : el("p", { class: "empty", text: "No ingest or skip entries yet." }),
+  ]);
+}
+
+defineView("log", "Log", renderLog);
+
+function renderInbox() {
+  const counts = {};
+  for (const record of LORE.raw) counts[record.state] = (counts[record.state] || 0) + 1;
+  const summary = ["NEW", "CHANGED", "SKIPPED", "PROCESSED"]
+    .filter(state => counts[state])
+    .map(state => counts[state] + " " + state).join(" · ") || "empty";
+  return el("section", {}, [
+    el("h2", { text: "raw/ — " + LORE.raw.length + " file(s): " + summary }),
+    // LORE.raw already sorts NEW and CHANGED first (lore_dashboard_parse.py)
+    // — render it as-is, no client-side re-sort.
+    LORE.raw.length ? el("table", {}, [
+      el("thead", {}, el("tr", {}, ["file", "ext", "size", "state", "latest", "pages", "note"]
+        .map(h => el("th", { text: h })))),
+      el("tbody", {}, LORE.raw.map(record => el("tr", {}, [
+        el("td", {}, [el("a", { href: record.href, class: "mono" }, record.name),
+                      copyButton(record.abs)]),
+        el("td", { class: "muted", text: record.ext || "—" }),
+        el("td", { text: fmtBytes(record.size) }),
+        el("td", {}, [el("span", { class: "badge " + record.state, text: record.state })]),
+        el("td", { class: "mono muted", text: record.latest_date || "—" }),
+        el("td", {}, record.pages.length
+          ? record.pages.map((id, at) => el("span", {}, [at ? ", " : "", pageLink(id)]))
+          : [el("span", { class: "muted", text: "none" })]),
+        el("td", { class: "muted", text: record.skip_reason || "" }),
+      ]))),
+    ]) : el("p", { class: "empty", text: "raw/ is empty." }),
+  ]);
+}
+
+defineView("inbox", "Inbox", renderInbox);
