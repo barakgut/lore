@@ -79,3 +79,106 @@ def load_entries(lore):
             "deprecated": fields.get("status") == "deprecated",
         })
     return entries, warnings
+
+
+def heading_for(entry):
+    if entry["deprecated"]:
+        return DEPRECATED
+    return entry["group"] or UNGROUPED
+
+
+def group_entries(entries):
+    """Ordered (heading, entries) pairs: headings case-insensitively, then
+    Ungrouped, then Deprecated; entries by title, case-insensitively."""
+    buckets = {}
+    for entry in entries:
+        buckets.setdefault(heading_for(entry), []).append(entry)
+    ordinary = sorted((h for h in buckets if h not in (UNGROUPED, DEPRECATED)), key=str.casefold)
+    special = [h for h in (UNGROUPED, DEPRECATED) if h in buckets]
+    return [(h, sorted(buckets[h], key=lambda e: e["title"].casefold())) for h in ordinary + special]
+
+
+def entry_line(entry):
+    """The index line for an entry, and the WARN raised when it had to be cut."""
+    prefix = f"- [{entry['title']}]({entry['file']})"
+    line = f"{prefix} — {entry['hook']}" if entry["hook"] else prefix
+    if len(line) < ENTRY_CAP:
+        return line, None
+    budget = ENTRY_CAP - 1 - len(prefix) - len(" — ") - len("…")
+    hook = entry["hook"][:max(budget, 0)]
+    if " " in hook:
+        hook = hook.rsplit(" ", 1)[0]
+    cut = f"{prefix} — {hook}…" if hook else prefix
+    return cut, f"WARN: over-cap {entry['file']} ({len(line)} chars)"
+
+
+def render_flat(entries):
+    lines, warnings = ["# Lore Index", MARKER], []
+    for heading, members in group_entries(entries):
+        lines += ["", f"## {heading}"]
+        for entry in members:
+            line, warning = entry_line(entry)
+            lines.append(line)
+            if warning:
+                warnings.append(warning)
+    return "\n".join(lines) + "\n", warnings
+
+
+def render(lore, split=None):
+    """{relative path: text} for the index files, plus the WARN/NOTE lines.
+
+    The dashboard calls this to detect drift; the CLI writes what it returns.
+    (split is wired in Task 4; until then every render is flat.)
+    """
+    entries, messages = load_entries(lore)
+    text, warnings = render_flat(entries)
+    return {"index.md": text}, messages + warnings
+
+
+def write_files(lore, files):
+    """Write every rendered file; in split mode remove index/*.md files that
+    no longer correspond to a heading — the script owns that directory."""
+    lore = Path(lore)
+    for rel, text in files.items():
+        (lore / rel).parent.mkdir(exist_ok=True)
+        (lore / rel).write_text(text, encoding="utf-8")
+    if any(rel.startswith("index/") for rel in files):
+        for stale in (lore / "index").glob("*.md"):
+            if f"index/{stale.name}" not in files:
+                stale.unlink()
+
+
+def is_lore(lore):
+    return (Path(lore) / "wiki").is_dir() and (Path(lore) / "CLAUDE.md").is_file()
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        description="Regenerate a lore's index.md (and index/<Group>.md when split) from wiki/ frontmatter.")
+    parser.add_argument("lore", help="the lore folder (needs wiki/ and CLAUDE.md)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--split", action="store_true", help="write a hub index.md plus index/<Group>.md files")
+    mode.add_argument("--flat", action="store_true", help="remove index/ and write one flat index.md")
+    parser.add_argument("--groups", action="store_true", help="list groups with page counts; write nothing")
+    parser.add_argument("--seed-groups", action="store_true",
+                        help="stamp group: from the current index headings, then regenerate")
+    parser.add_argument("--check", action="store_true",
+                        help="exit 1 if the index on disk differs from what would be written; write nothing")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    lore = Path(args.lore).expanduser().resolve()
+    if not is_lore(lore):
+        print(f"ERROR: {lore} is not a lore (needs wiki/ and CLAUDE.md)", file=sys.stderr)
+        return 2
+    files, messages = render(lore)
+    write_files(lore, files)
+    for message in messages:
+        print(message)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
