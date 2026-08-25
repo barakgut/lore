@@ -6,10 +6,18 @@ function fieldText(page, field) {
   return field === "tags" ? page.tags.join(" ") : String(page[field] || "");
 }
 
+// One term against one page: {score, field} on a hit, null on a miss. Both
+// branches return that same shape — returning a bare number from the tag:
+// branch forced the call site into `total += hit.score || hit`, which is
+// correct only for as long as no legitimate score is ever 0. A tag: term
+// names no scoring field of its own, so it reports field: null and leaves
+// the result's label to a later plain term (a tag-only query falls back to
+// "tags" below).
 function scoreTerm(page, term) {
   if (term.startsWith("tag:")) {
     const wanted = term.slice(4);
-    return page.tags.some(tag => tag.toLowerCase().includes(wanted)) ? FIELD_WEIGHTS.tags : 0;
+    return page.tags.some(tag => tag.toLowerCase().includes(wanted))
+      ? { score: FIELD_WEIGHTS.tags, field: null } : null;
   }
   let best = 0, where = null;
   for (const field of Object.keys(FIELD_WEIGHTS)) {
@@ -17,7 +25,7 @@ function scoreTerm(page, term) {
       if (FIELD_WEIGHTS[field] > best) { best = FIELD_WEIGHTS[field]; where = field; }
     }
   }
-  return best ? { score: best, field: where } : 0;
+  return best ? { score: best, field: where } : null;
 }
 
 function snippetFor(page, terms) {
@@ -49,8 +57,8 @@ function searchPages(query, filters) {
     for (const term of terms) {
       const hit = scoreTerm(page, term);
       if (!hit) { matchedAll = false; break; }
-      total += hit.score || hit;
-      if (!field && hit.field) field = hit.field;
+      total += hit.score;
+      if (!field) field = hit.field;
     }
     if (!matchedAll) continue;
     results.push({ page, score: total, field: field || "tags", snippet: snippetFor(page, terms) });

@@ -435,6 +435,19 @@ class TestSearchEngine(unittest.TestCase):
         self.assertEqual([(r["id"], r["score"], r["field"]) for r in results],
                           [("tag-zephyr", 4, "tags")])
 
+    def test_a_tag_term_and_a_plain_term_sum_their_scores_in_one_query(self):
+        # The one query that crosses scoreTerm's two branches: "tag:zephyr"
+        # scores 4 through the tags branch and "overview" scores 8 through
+        # the title branch, for 12 — and the reported field is the plain
+        # term's, since a tag: term names no field of its own.
+        pages = [
+            _page("tag-and-title", "Zephyr Overview", tags=["zephyr-tag"]),
+            _page("tag-only", "Unrelated Page", tags=["zephyr-tag"]),   # no "overview"
+        ]
+        [results] = self._search(pages, [{"query": "tag:zephyr overview", "filters": {}}])
+        self.assertEqual([(r["id"], r["score"], r["field"]) for r in results],
+                          [("tag-and-title", 12, "title")])
+
     def test_type_status_tag_filters_apply_before_ranking(self):
         # The three <select> filters are exact-match page-attribute
         # gates, applied before scoring — distinct from the substring
