@@ -268,5 +268,117 @@ class TestCheckFlag(unittest.TestCase):
         self.assertEqual(check(lore), ["index.md"])
 
 
+from lore_index import SPLIT_THRESHOLD, group_filename, hub_line, render_split  # noqa: E402
+
+
+def many_pages(n, group="G"):
+    return {f"P{i:03d}.md": page(f"Page {i:03d}", group) for i in range(n)}
+
+
+class TestSplitRender(unittest.TestCase):
+    def test_group_filename_replaces_spaces_and_slashes(self):
+        self.assertEqual(group_filename("Power / Thermal Mgmt"), "Power___Thermal_Mgmt.md")
+
+    def test_hub_line_lists_count_and_titles(self):
+        members = [{"file": "wiki/A.md", "title": "A", "hook": "", "group": "Hardware", "deprecated": False},
+                   {"file": "wiki/B.md", "title": "B", "hook": "", "group": "Hardware", "deprecated": False}]
+        self.assertEqual(hub_line("Hardware", members), "- [Hardware](index/Hardware.md) — 2 pages: A, B")
+        self.assertEqual(hub_line("Hardware", members[:1]), "- [Hardware](index/Hardware.md) — 1 page: A")
+
+    def test_hub_line_is_cut_at_a_title_boundary_under_the_cap(self):
+        members = [{"file": f"wiki/{i}.md", "title": f"A fairly long page title number {i}", "hook": "",
+                    "group": "G", "deprecated": False} for i in range(40)]
+        line = hub_line("G", members)
+        self.assertLess(len(line), ENTRY_CAP)
+        self.assertTrue(line.endswith(", …"))
+        self.assertTrue(line.startswith("- [G](index/G.md) — 40 pages: A fairly long page title number 0, "))
+
+    def test_hub_line_with_no_room_for_any_title_still_fits_under_cap(self):
+        # The link/heading is short but the one title is too long to fit
+        # alongside it — the line still must come in under the cap, by
+        # dropping the whole title in favour of a bare ellipsis rather than
+        # truncating the link target.
+        members = [{"file": "wiki/A.md", "title": "T" * 190, "hook": "", "group": "G", "deprecated": False}]
+        line = hub_line("G", members)
+        self.assertEqual(line, "- [G](index/G.md) — 1 page: …")
+        self.assertLess(len(line), ENTRY_CAP)
+
+    def test_hub_line_with_pathological_long_heading_is_emitted_as_is(self):
+        # The heading/filename alone (the link target) leave no room even
+        # for a bare "…" under the cap. Never truncate the link target:
+        # emit the full, uncut line instead (same precedent as entry_line's
+        # pathological-long-filename case).
+        heading = "H" * 250
+        members = [{"file": "wiki/A.md", "title": "A", "hook": "", "group": heading, "deprecated": False}]
+        naive = f"- [{heading}](index/{group_filename(heading)}) — 1 page: A"
+        line = hub_line(heading, members)
+        self.assertEqual(line, naive)
+        self.assertGreaterEqual(len(line), ENTRY_CAP)   # cannot fit without truncating the link target
+
+    def test_split_files(self):
+        lore = make_lore({"A.md": page("A", "Hardware"), "B.md": page("B", "Software"),
+                          "D.md": page("D", "Hardware", status="deprecated")})
+        entries, _ = load_entries(lore)
+        files, warnings = render_split(entries)
+        self.assertEqual(sorted(files), ["index.md", "index/Deprecated.md", "index/Hardware.md", "index/Software.md"])
+        self.assertEqual(files["index.md"], "\n".join([
+            "# Lore Index", MARKER, "",
+            "- [Hardware](index/Hardware.md) — 1 page: A",
+            "- [Software](index/Software.md) — 1 page: B",
+            "- [Deprecated](index/Deprecated.md) — 1 page: D",
+        ]) + "\n")
+        self.assertEqual(files["index/Hardware.md"],
+                         f"# Hardware\n{MARKER}\n\n- [A](wiki/A.md) — about A\n")   # paths stay lore-relative
+        self.assertEqual(warnings, [])
+
+
+class TestSplitCli(unittest.TestCase):
+    def test_note_above_threshold_flat_still_written(self):
+        lore = make_lore(many_pages(SPLIT_THRESHOLD + 1))
+        proc = run(lore)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, f"NOTE: {SPLIT_THRESHOLD + 1} entries > 200; run with --split to split the index\n")
+        self.assertFalse((lore / "index").exists())
+        self.assertIn("## G", (lore / "index.md").read_text())
+
+    def test_no_note_at_exactly_the_threshold(self):
+        proc = run(make_lore(many_pages(SPLIT_THRESHOLD)))
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+    def test_split_flag_writes_hub_and_group_files(self):
+        lore = make_lore({"A.md": page("A", "Hardware"), "B.md": page("B", "Software")})
+        proc = run(lore, "--split")
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+        self.assertEqual(sorted(p.name for p in (lore / "index").glob("*.md")), ["Hardware.md", "Software.md"])
+        self.assertIn("- [Hardware](index/Hardware.md) — 1 page: A", (lore / "index.md").read_text())
+
+    def test_split_is_sticky_and_removes_stale_group_files(self):
+        lore = make_lore({"A.md": page("A", "Hardware"), "B.md": page("B", "Software")})
+        run(lore, "--split")
+        (lore / "wiki" / "B.md").unlink()
+        (lore / "wiki" / "C.md").write_text(page("C", "Thermal"))
+        proc = run(lore)                                        # no flag: stays split
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+        self.assertEqual(sorted(p.name for p in (lore / "index").glob("*.md")), ["Hardware.md", "Thermal.md"])
+        self.assertEqual(check(lore), [])
+
+    def test_flat_flag_removes_index_dir(self):
+        lore = make_lore({"A.md": page("A", "Hardware")})
+        run(lore, "--split")
+        proc = run(lore, "--flat")
+        self.assertEqual(proc.returncode, 0)
+        self.assertFalse((lore / "index").exists())
+        self.assertIn("## Hardware\n- [A](wiki/A.md) — about A", (lore / "index.md").read_text())
+
+    def test_split_and_flat_together_is_a_usage_error(self):
+        self.assertEqual(run(make_lore(), "--split", "--flat").returncode, 2)
+
+    def test_check_sees_a_stale_group_file(self):
+        lore = make_lore({"A.md": page("A", "Hardware")})
+        run(lore, "--split")
+        (lore / "index" / "Old.md").write_text("# Old\n")
+        self.assertEqual(check(lore), ["index/Old.md"])
+
+
 if __name__ == "__main__":
     unittest.main()

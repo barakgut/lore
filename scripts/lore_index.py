@@ -157,15 +157,73 @@ def render_flat(entries):
     return "\n".join(lines) + "\n", warnings
 
 
+def group_filename(heading):
+    return heading.replace(" ", "_").replace("/", "_") + ".md"
+
+
+def hub_line(heading, members):
+    """`- [Group](index/Group.md) — <n> pages: <titles>` cut under the cap at a
+    title boundary; `, …` marks the cut.
+
+    The link target is never truncated. If the heading/filename alone leave
+    no room even for a bare "…" under the cap, the full, uncut line is
+    emitted instead — cutting titles wouldn't bring it under the cap either,
+    so there is nothing to gain from hiding them (same precedent as
+    entry_line's pathological long-filename case).
+    """
+    n = len(members)
+    base = f"- [{heading}](index/{group_filename(heading)}) — {n} page{'s' if n != 1 else ''}: "
+    titles = [entry["title"] for entry in members]
+    naive = base + ", ".join(titles)
+    if len(base + "…") >= ENTRY_CAP:
+        return naive
+    chosen = []
+    for title in titles:
+        last = len(chosen) + 1 == len(titles)
+        candidate = base + ", ".join(chosen + [title]) + ("" if last else ", …")
+        if len(candidate) >= ENTRY_CAP:
+            break
+        chosen.append(title)
+    if len(chosen) == len(titles):
+        return naive
+    return base + ", ".join(chosen) + (", …" if chosen else "…")
+
+
+def render_split(entries):
+    """A hub index.md plus one index/<Group>.md per heading."""
+    files, warnings = {}, []
+    hub = ["# Lore Index", MARKER, ""]
+    for heading, members in group_entries(entries):
+        hub.append(hub_line(heading, members))
+        lines = [f"# {heading}", MARKER, ""]
+        for entry in members:
+            line, warning = entry_line(entry)
+            lines.append(line)
+            if warning:
+                warnings.append(warning)
+        files[f"index/{group_filename(heading)}"] = "\n".join(lines) + "\n"
+    files["index.md"] = "\n".join(hub) + "\n"
+    return files, warnings
+
+
 def render(lore, split=None):
     """{relative path: text} for the index files, plus the WARN/NOTE lines.
 
-    The dashboard calls this to detect drift; the CLI writes what it returns.
-    (split is wired in Task 4; until then every render is flat.)
+    split=None reads the current mode from disk (index/ exists → split). The
+    dashboard calls this to detect drift; the CLI writes what it returns.
     """
+    lore = Path(lore)
+    if split is None:
+        split = (lore / "index").is_dir()
     entries, messages = load_entries(lore)
-    text, warnings = render_flat(entries)
-    return {"index.md": text}, messages + warnings
+    if split:
+        files, warnings = render_split(entries)
+    else:
+        text, warnings = render_flat(entries)
+        files = {"index.md": text}
+        if len(entries) > SPLIT_THRESHOLD:
+            warnings.append(f"NOTE: {len(entries)} entries > {SPLIT_THRESHOLD}; run with --split to split the index")
+    return files, messages + warnings
 
 
 def write_files(lore, files):
@@ -235,7 +293,10 @@ def main(argv=None):
         for rel in drift:
             print(f"DRIFT {rel}")
         return 1 if drift else 0
-    files, messages = render(lore)
+    if args.flat and (lore / "index").is_dir():
+        shutil.rmtree(lore / "index")
+    split = True if args.split else False if args.flat else None
+    files, messages = render(lore, split)
     write_files(lore, files)
     for message in messages:
         print(message)
