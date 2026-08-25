@@ -226,6 +226,27 @@ class TestParseIndex(unittest.TestCase):
         index = parse_index(lore, load_pages(lore))
         self.assertEqual(index["over_cap"][0]["title"], "A Page")
 
+    def test_the_char_cap_boundary_is_under_200_not_up_to_200(self):
+        # skills/lore/SKILL.md states the hard cap as "<200 chars per entry",
+        # so a line of exactly 200 characters is already over it and 199 is
+        # the longest legal one.
+        stem = "- [A Page](wiki/A_Page.md) — "
+        at_cap = self._lore(f"## RF\n\n{stem}{'x' * (200 - len(stem))}\n")
+        over = parse_index(at_cap, load_pages(at_cap))["over_cap"]
+        self.assertEqual([(e["title"], e["chars"]) for e in over], [("A Page", 200)])
+        under_cap = self._lore(f"## RF\n\n{stem}{'x' * (199 - len(stem))}\n")
+        self.assertEqual(parse_index(under_cap, load_pages(under_cap))["over_cap"], [])
+
+    def test_line_count_does_not_count_a_trailing_newline_as_a_line(self):
+        # Every real index.md ends with a newline: it terminates the last
+        # line rather than starting an empty one. line_count feeds the
+        # index_size health check and the Browse tab header, so counting the
+        # split parts was one too many for every lore on disk.
+        with_newline = self._lore("# Lore Index\n\n- [A Page](wiki/A_Page.md) — hook\n")
+        self.assertEqual(parse_index(with_newline, load_pages(with_newline))["line_count"], 3)
+        without = self._lore("# Lore Index\n\n- [A Page](wiki/A_Page.md) — hook")
+        self.assertEqual(parse_index(without, load_pages(without))["line_count"], 3)
+
 
 class TestParseLog(unittest.TestCase):
     def _lore(self, log_text):

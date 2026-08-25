@@ -199,6 +199,15 @@ INDEX_ENTRY_CAP = 200
 INDEX_LINE_TARGET = 200
 
 
+def _line_count(text):
+    """Lines in `text`. A trailing newline terminates the last line rather
+    than starting an empty one — every real index.md ends with one, so
+    counting the split parts reported one line too many for all of them."""
+    if not text:
+        return 0
+    return len(text.split("\n")) - (1 if text.endswith("\n") else 0)
+
+
 def parse_index(lore, pages):
     """Parse index.md into groups/entries; stamp group+hook onto page records."""
     text = _read_text(Path(lore) / "index.md")
@@ -236,13 +245,15 @@ def parse_index(lore, pages):
                 page["index_deprecated_section"] = current["deprecated"]
         else:
             ghost_entries.append({"title": entry["title"], "target": target})
-        if entry["chars"] > INDEX_ENTRY_CAP:
+        # The schema's cap is "<200 chars per entry" (skills/lore/SKILL.md),
+        # so a line of exactly INDEX_ENTRY_CAP chars is already over it.
+        if entry["chars"] >= INDEX_ENTRY_CAP:
             over_cap.append({"title": entry["title"], "chars": entry["chars"]})
     misplaced = [p["id"] for p in pages
                  if p["status"] == "deprecated" and p["id"] in listed
                  and not p.get("index_deprecated_section")]
     return {
-        "line_count": len(text.split("\n")),
+        "line_count": _line_count(text),
         "entry_count": entry_count,
         "groups": groups,
         "orphans": [p["id"] for p in pages if p["id"] not in listed],
