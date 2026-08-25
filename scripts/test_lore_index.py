@@ -222,5 +222,41 @@ class TestCli(unittest.TestCase):
         self.assertEqual(run(lore).returncode, 2)
 
 
+from lore_index import check, list_groups  # noqa: E402
+
+
+class TestGroupsFlag(unittest.TestCase):
+    def test_lists_group_values_with_counts_including_deprecated_pages(self):
+        lore = make_lore({"A.md": page("A", "zeta"), "B.md": page("B", "Alpha"),
+                          "C.md": page("C", "Alpha", status="deprecated"), "N.md": page("N")})
+        entries, _ = load_entries(lore)
+        self.assertEqual(list_groups(entries), [("Alpha", 2), ("zeta", 1), ("Ungrouped", 1)])
+        proc = run(lore, "--groups")
+        self.assertEqual((proc.returncode, proc.stdout), (0, "Alpha\t2\nzeta\t1\nUngrouped\t1\n"))
+        self.assertFalse((lore / "index.md").exists())          # --groups never writes
+
+
+class TestCheckFlag(unittest.TestCase):
+    def test_fresh_index_is_not_drift(self):
+        lore = make_lore({"A.md": page("A", "G")})
+        run(lore)
+        self.assertEqual(check(lore), [])
+        proc = run(lore, "--check")
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+    def test_new_page_without_regeneration_is_drift(self):
+        lore = make_lore({"A.md": page("A", "G")})
+        run(lore)
+        (lore / "wiki" / "B.md").write_text(page("B", "G"))
+        self.assertEqual(check(lore), ["index.md"])
+        proc = run(lore, "--check")
+        self.assertEqual((proc.returncode, proc.stdout), (1, "DRIFT index.md\n"))
+        self.assertNotIn("B", (lore / "index.md").read_text())   # --check never writes
+
+    def test_missing_index_is_drift(self):
+        lore = make_lore({"A.md": page("A", "G")})
+        self.assertEqual(check(lore), ["index.md"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -98,6 +98,17 @@ def group_entries(entries):
     return [(h, sorted(buckets[h], key=lambda e: e["title"].casefold())) for h in ordinary + special]
 
 
+def list_groups(entries):
+    """(group, count) by the pages' own group value — deprecated pages count
+    too, so the agent sees every group that exists; Ungrouped last."""
+    counts = {}
+    for entry in entries:
+        name = entry["group"] or UNGROUPED
+        counts[name] = counts.get(name, 0) + 1
+    ordinary = sorted((g for g in counts if g != UNGROUPED), key=str.casefold)
+    return [(g, counts[g]) for g in ordinary + ([UNGROUPED] if UNGROUPED in counts else [])]
+
+
 def entry_line(entry):
     """The index line for an entry, and the WARN raised when it had to be cut."""
     prefix = f"- [{entry['title']}]({entry['file']})"
@@ -165,6 +176,26 @@ def write_files(lore, files):
                 stale.unlink()
 
 
+def check(lore):
+    """Relative paths whose on-disk content differs from a fresh render —
+    missing files and stale index/*.md files included. Sorted."""
+    lore = Path(lore)
+    files, _ = render(lore)
+    drift = []
+    for rel, text in files.items():
+        try:
+            current = (lore / rel).read_text(encoding="utf-8")
+        except OSError:
+            current = None
+        if current != text:
+            drift.append(rel)
+    if (lore / "index").is_dir():
+        for stale in (lore / "index").glob("*.md"):
+            if f"index/{stale.name}" not in files:
+                drift.append(f"index/{stale.name}")
+    return sorted(drift)
+
+
 def is_lore(lore):
     return (Path(lore) / "wiki").is_dir() and (Path(lore) / "CLAUDE.md").is_file()
 
@@ -190,6 +221,15 @@ def main(argv=None):
     if not is_lore(lore):
         print(f"ERROR: {lore} is not a lore (needs wiki/ and CLAUDE.md)", file=sys.stderr)
         return 2
+    if args.groups:
+        for name, count in list_groups(load_entries(lore)[0]):
+            print(f"{name}\t{count}")
+        return 0
+    if args.check:
+        drift = check(lore)
+        for rel in drift:
+            print(f"DRIFT {rel}")
+        return 1 if drift else 0
     files, messages = render(lore)
     write_files(lore, files)
     for message in messages:
