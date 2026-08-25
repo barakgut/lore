@@ -1068,7 +1068,11 @@ global.document = {
   createElementNS: (ns, tag) => makeNode(tag),
   createTextNode: (text) => ({ nodeType: 3, text: String(text) }),
 };
-global.getComputedStyle = () => ({ getPropertyValue: () => "" });
+// Counted, not just stubbed: every graph colour is a CSS custom property
+// that never changes for the life of the graph, so they must be resolved
+// once at init and never again from inside the per-frame draw loop.
+let computedStyleCalls = 0;
+global.getComputedStyle = () => { computedStyleCalls++; return { getPropertyValue: () => "" }; };
 
 const winListeners = {};
 global.window = {
@@ -1103,9 +1107,14 @@ const resizeAfterCreate1 = countOf("resize") - resizeBefore1;
 const mouseupAfterCreate1 = countOf("mouseup") - mouseupBefore1;
 const hostChildrenAfterCreate1 = host1.children.length;
 
+// initGraph() resolves the palette and then runs loop() once synchronously,
+// so this count covers the palette plus the first full draw of both nodes.
+const computedStyleAfterCreate1 = computedStyleCalls;
+
 const rafLenBeforeFrame1 = rafQueue.length;
 fireOneFrame();   // still connected: tick/draw, then reschedule
 const rescheduledWhileConnected1 = rafLenBeforeFrame1 > 0 && rafQueue.length === rafLenBeforeFrame1;
+const computedStyleAfterFrame1 = computedStyleCalls;   // a whole extra draw
 
 graph1.destroy();
 const resizeAfterDestroy1 = countOf("resize") - resizeBefore1;
@@ -1139,6 +1148,7 @@ const queueEmptyAfterSelfStop2 = rafLenBeforeDisconnectFrame > 0 && rafQueue.len
 
 process.stdout.write(JSON.stringify({
   resizeAfterCreate1, mouseupAfterCreate1, hostChildrenAfterCreate1, rescheduledWhileConnected1,
+  computedStyleAfterCreate1, computedStyleAfterFrame1,
   resizeAfterDestroy1, mouseupAfterDestroy1, hostChildrenAfterDestroy1,
   queueEmptyAfterDestroyFrame1, destroyTwiceThrew,
   resizeAfterCreate2, rescheduledWhileConnected2,
@@ -1170,6 +1180,17 @@ class TestGraphLifecycle(unittest.TestCase):
         self.assertEqual(out["hostChildrenAfterDestroy1"], 0)
         self.assertTrue(out["queueEmptyAfterDestroyFrame1"], "loop rescheduled itself after destroy()")
         self.assertFalse(out["destroyTwiceThrew"], "destroy() must be safe to call more than once")
+
+    def test_the_colour_palette_is_resolved_once_at_init_never_per_frame(self):
+        # getComputedStyle() is a layout-flushing round trip, and draw() used
+        # to call it 2-4 times per node per animation frame for values that
+        # cannot change (one dark palette, no theme toggle): at 400 nodes and
+        # 60fps, ~100k lookups a second. A whole extra frame must cost zero.
+        out = self._run()
+        self.assertEqual(out["computedStyleAfterFrame1"], out["computedStyleAfterCreate1"],
+                         "draw() resolved a CSS variable during a frame")
+        self.assertLessEqual(out["computedStyleAfterCreate1"], 20,
+                             "the palette should be a fixed, one-time set of lookups")
 
     def test_host_disconnection_alone_self_stops_the_loop_with_no_explicit_destroy_call(self):
         out = self._run()

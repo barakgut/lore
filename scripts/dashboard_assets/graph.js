@@ -120,6 +120,21 @@ function initGraph(host, options) {
   const canvas = el("canvas", { class: "graph-canvas" });
   host.append(canvas);
   const ctx = canvas.getContext("2d");
+
+  // Every colour draw() uses is a CSS custom property that never changes for
+  // the life of this graph (one dark palette, no theme toggle), so resolve
+  // them all exactly once here. Reading them inside draw() meant a
+  // getComputedStyle() round trip 2-4 times per node per animation frame.
+  const palette = {
+    hairline: cssVar("--hairline"),
+    missing: cssVar("--c-missing"),
+    ink: cssVar("--ink"),
+    label: cssVar("--ink-2"),
+    ring: cssVar("--ring"),
+    muted: cssVar("--muted"),
+    byType: Object.fromEntries(Object.entries(NODE_COLOURS).map(
+      ([type, name]) => [type, cssVar(name)])),
+  };
   let width = 0, height = opts.height || 600, dpr = 1;
 
   const byId = new Map(allNodes.map(node => [node.id, node]));
@@ -198,7 +213,7 @@ function initGraph(host, options) {
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.strokeStyle = cssVar("--hairline"); ctx.lineWidth = 1;
+    ctx.strokeStyle = palette.hairline; ctx.lineWidth = 1;
     for (const link of links) {
       const [x1, y1] = toScreen(link.s), [x2, y2] = toScreen(link.t);
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
@@ -211,20 +226,20 @@ function initGraph(host, options) {
       ctx.beginPath();
       if (node.ghost) {
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = cssVar("--c-missing"); ctx.lineWidth = 1.5;
+        ctx.strokeStyle = palette.missing; ctx.lineWidth = 1.5;
         ctx.arc(x, y, r, 0, 7); ctx.stroke();
         ctx.setLineDash([]);
       } else {
-        ctx.fillStyle = cssVar(NODE_COLOURS[node.type] || NODE_COLOURS.unknown);
+        ctx.fillStyle = palette.byType[node.type] || palette.byType.unknown;
         if (node.type === "card") ctx.rect(x - r, y - r, 2 * r, 2 * r);
         else ctx.arc(x, y, r, 0, 7);
         ctx.fill();
-        ctx.strokeStyle = node.id === state.focus ? cssVar("--ink") : cssVar("--ring");
+        ctx.strokeStyle = node.id === state.focus ? palette.ink : palette.ring;
         ctx.lineWidth = node.id === state.focus ? 2 : 1;
         ctx.stroke();
       }
       if (showLabels) {
-        ctx.fillStyle = cssVar("--ink-2");
+        ctx.fillStyle = palette.label;
         ctx.font = "11px system-ui, sans-serif";
         ctx.fillText(node.title, x + r + 4, y + 4);
       }
@@ -232,7 +247,7 @@ function initGraph(host, options) {
     }
     if (nodes.some(node => node.isolated)) {
       const [x, y] = toScreen({ x: -320, y: 310 });
-      ctx.fillStyle = cssVar("--muted");
+      ctx.fillStyle = palette.muted;
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText("isolated pages", x, y);
     }
