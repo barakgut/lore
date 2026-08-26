@@ -5,8 +5,9 @@ Only checks a program can decide are computed. The judgment-only lint checks
 (active contradiction cross-check, footnote discipline judgment, missing
 concept pages, missing cross-references, knowledge gaps, discard candidates)
 are never scored — the dashboard shows the last lint entry's counts instead.
-Index drift is computed by importing scripts/lore_index.py; when that import
-fails the check is reported as unavailable and scores clean.
+Index drift comes from lore_dashboard_parse, which imports scripts/lore_index.py
+for it; when that import fails the check is reported as unavailable and scores
+clean.
 """
 import math
 import re

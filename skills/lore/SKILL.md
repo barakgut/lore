@@ -10,13 +10,13 @@ description: Use when answering any domain or knowledge question in a project li
 Resolve `$LORE` with these rungs, first match wins. Never guess, never scan the disk, never fall back to `~/lore`. Whatever path a rung yields, expand `~` and resolve a relative path against cwd **before** testing it, so `$LORE` is always an absolute, symlink-resolved path.
 
 1. **A path in the user's message** — e.g. `/lore:lore-ingest ~/wikis/hardware`.
-2. **cwd is a lore** — `[ -f ./index.md ] && [ -d ./raw ] && [ -d ./wiki ]`. Use cwd.
+2. **cwd is a lore** — `[ -d ./raw ] && [ -d ./wiki ] && [ -f ./CLAUDE.md ]`. Use cwd.
 3. **The project's `## Knowledge Base` section** — the project's `CLAUDE.md` has a `## Knowledge Base` heading whose text names the lore path. It is usually already in context; otherwise read `./CLAUDE.md`.
 4. **Nothing matched** — STOP. Tell the user, verbatim:
 
    > No lore found. `cd` into a lore, pass its path (`/lore:lore-ingest <path>`), or add a `## Knowledge Base` section naming the lore path to this project's `CLAUDE.md` (snippet in the plugin README and in the `/lore:lore-init` report).
 
-Rung 2 needs all three of `index.md`, `raw/`, and `wiki/` — it fires on whatever directory the user happens to be in, and a lone `index.md` is a common filename. Rungs 1 and 3 are satisfied by `index.md` alone, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
+Rung 2 needs all three of `raw/`, `wiki/`, and `CLAUDE.md` — it fires on whatever directory the user happens to be in, and any one of those names is common on its own; they are the same three markers the plugin's hook uses to recognise a lore. It deliberately does **not** test `index.md`: the index is generated, so a lore whose `index.md` was deleted is still a lore — and rung 2 is the rung that has to recognise the user's own lore while they are standing in it. The repair below then puts the index back. Rungs 1 and 3 are satisfied by `index.md` alone, because the path was named on purpose and the stricter test would reject a lore whose `raw/` the user has temporarily emptied.
 
 If a rung matches but the path has no `index.md`, look for `wiki/` and `CLAUDE.md` under it first: a folder with both **is** a lore whose generated index is merely missing — regenerate it (**Index regeneration**) and carry on. Otherwise STOP and name the bad path — **never fall through** to the next rung. A stale `## Knowledge Base` path must be reported (suggest fixing the path in that section), not silently bypassed.
 
@@ -161,12 +161,15 @@ the plugin root — the directory that holds `skills/` and `hooks/`.)
   `WARN: over-cap wiki/X.md (<n> chars)` are both fixed in the page — add the
   frontmatter; shorten that page's `description` — and never in the index,
   which is generated from those pages; chasing those page-side fixes is lint's
-  job. The cap is 200: every entry line must come to fewer than 200
-  characters. Past it the script cuts the hook at a word boundary with `…`,
+  job. The cap is 200: every entry line — and, once the index is split,
+  every hub line — must come to fewer than 200 characters. Past it the script cuts the hook at a word boundary with `…`,
   then the title, but never the link target — so a page whose title and path
   alone fill the cap keeps a long line and its WARN until it is renamed.
 - **`ERROR: index.md is hand-curated and no page carries group:; run --seed-groups once`**
-  (stderr, exit 1): the lore predates v0.5. Run the script once more with
+  (stderr, exit 1): the lore predates v0.5 — its `index.md` still holds
+  headings no page carries. It fires per entry, so a page that already has a
+  `group:` (one your own flow just wrote, say) does not make the run safe and
+  never means the ERROR is stale. Run the script once more with
   `--seed-groups` — it stamps `group:` from the old headings onto each page
   the old index listed under a real topic heading, then regenerates. Pages the
   old index listed under `## Ungrouped`, and pages it never listed at all, are
@@ -176,16 +179,20 @@ the plugin root — the directory that holds `skills/` and `hooks/`.)
   Report which pages were stamped, and continue.
 - **`NOTE: <n> entries > 200; run with --split to split the index`**: the
   index is past its size target. The refusal marker is a line of its own in
-  the lore's `CLAUDE.md` `## Layout` section that **begins**
-  `Index stays flat by user choice (` and carries a real date — prose
-  elsewhere in that section that merely describes the convention is not one,
-  and neither is an undated mention. If that marker line is there, relay the
+  the lore's `CLAUDE.md` `## Layout` section that **begins** — after an
+  optional `- ` bullet marker, because that section is a bullet list —
+  `Index stays flat by user choice (` and carries a real date. Nothing else
+  may precede the phrase: prose elsewhere in that section that merely
+  describes the convention is not a marker, and neither is an undated
+  mention. If that marker line is there, relay the
   NOTE and do nothing else. Otherwise ask the user once: split the index into
   a hub plus one `index/<Group>.md` per group? Yes → re-run with `--split`,
   then commit. No → append, as its own line at the end of that `## Layout`
   section,
   `Index stays flat by user choice (YYYY-MM-DD); do not propose splitting again.`
-  with `YYYY-MM-DD` replaced by today's date, and commit it with the rest. The
+  with `YYYY-MM-DD` replaced by today's date — as a `- ` bullet if that
+  section's lines are bullets, which the check above allows for — and commit
+  it with the rest. The
   user reverts by deleting that line or by saying "split the index" (then run
   `--split`). Once split, every plain run keeps the split; `--flat` returns to
   one file.
