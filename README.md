@@ -119,7 +119,7 @@ raw files are distilled as usual, and wiki pages without frontmatter get
 frontmatter, an index entry, and a log entry. One-time copy — the pages belong
 to the lore from then on.
 
-## Upgrading a pre-0.3 lore
+## Upgrading an older lore
 
 Nothing is migrated automatically. Pages written under the old schema
 (`captured`, `freshness`, `trust`, singular `source:`) are reported by
@@ -132,9 +132,12 @@ it.
 
 Upgrading from v0.4: pages carry no `group:` yet, so the first index
 regeneration stops with `ERROR: index.md is hand-curated …` and Claude runs
-the script once with `--seed-groups`, which stamps each page's `group:` from
-the heading it sat under in your old index. Nothing else is migrated; pages
-listed under `## Deprecated` stay there by their `status`.
+the script once with `--seed-groups`, which stamps `group:` onto each page
+your old index listed under a real topic heading, using that heading.
+Pages your old index listed under `## Ungrouped` or `## Deprecated`, and any
+page it never listed at all, are not stamped — they land under
+`## Ungrouped` afterwards, except pages already `status: deprecated`, which
+keep rendering under `## Deprecated` regardless. Nothing else is migrated.
 
 ## The folder
 
@@ -163,9 +166,10 @@ a page without one lists under `## Ungrouped`) and an optional `status:` (a
 `deprecated` page lists under `## Deprecated` regardless of group), and
 `scripts/lore_index.py` projects those into the catalog. Claude regenerates it
 at the end of every init, ingest, lint, discard, and answer promotion, and the
-plugin's hook stops it from editing the file by hand. To move a page to
-another heading or reword its hook, edit the page's frontmatter — then ask
-Claude to lint, or run the script yourself:
+plugin's hook stops it from editing `index.md` (or, once split, any file
+under `index/`) by hand. To move a page to another heading or reword its
+hook, edit the page's frontmatter — then ask Claude to lint, or run the
+script yourself:
 
     python3 scripts/lore_index.py <lore>            # regenerate
     python3 scripts/lore_index.py <lore> --groups   # list the groups in use
