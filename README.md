@@ -79,7 +79,7 @@ below should be offered.
     # drop files into <lore>/raw/   (PDF, images, xlsx/csv, md, txt, saved HTML)
     cd <lore> && /lore:lore-ingest      # distill new raw files into the wiki
     # paste the ## Knowledge Base block below into each project's CLAUDE.md
-    /lore:lore-lint                     # periodic health check (after ~5 ingests or monthly)
+    /lore:lore-lint                     # periodic health check (after ~5 ingests or monthly); regenerates the index
 
 To link a project, add this to its `CLAUDE.md` (init prints it with the real
 path filled in):
@@ -119,7 +119,7 @@ raw files are distilled as usual, and wiki pages without frontmatter get
 frontmatter, an index entry, and a log entry. One-time copy — the pages belong
 to the lore from then on.
 
-## Upgrading a pre-0.3 lore
+## Upgrading an older lore
 
 Nothing is migrated automatically. Pages written under the old schema
 (`captured`, `freshness`, `trust`, singular `source:`) are reported by
@@ -130,11 +130,20 @@ hash, so `/lore:lore-ingest` can't tell whether they've since been replaced;
 name each one explicitly once (`/lore:lore-ingest <file>`) to start tracking
 it.
 
+Upgrading from v0.4: pages carry no `group:` yet, so the first index
+regeneration stops with `ERROR: index.md is hand-curated …` and Claude runs
+the script once with `--seed-groups`, which stamps `group:` onto each page
+your old index listed under a real topic heading, using that heading.
+Pages your old index listed under `## Ungrouped` or `## Deprecated`, and any
+page it never listed at all, are not stamped — they land under
+`## Ungrouped` afterwards, except pages already `status: deprecated`, which
+keep rendering under `## Deprecated` regardless. Nothing else is migrated.
+
 ## The folder
 
     <lore>/
       CLAUDE.md       # the schema — full rules; evolve it with the agent, it wins over defaults
-      index.md        # catalog — read this first
+      index.md        # catalog — read this first; generated from the pages, never hand-edited
       log.md          # append-only history / processed-file ledger
       raw/            # your originals — never modified
       wiki/           # the distilled lore — plain markdown, yours to read and edit
@@ -148,6 +157,28 @@ revert, unless the lore was created with `--no-git`.
 
 By default the lore is its own git repository — back it up like any other repo,
 or add a remote and push it to carry your knowledge base between machines.
+
+## The index
+
+`index.md` is generated: a wiki page's frontmatter carries a `title:` and a
+one-line `description:` (its hook), plus an optional `group:` (its heading —
+a page without one lists under `## Ungrouped`) and an optional `status:` (a
+`deprecated` page lists under `## Deprecated` regardless of group), and
+`scripts/lore_index.py` projects those into the catalog. Claude regenerates it
+at the end of every init, ingest, lint, discard, and answer promotion, and the
+plugin's hook stops it from editing `index.md` (or, once split, any file
+under `index/`) by hand. To move a page to another heading or reword its
+hook, edit the page's frontmatter — then ask Claude to lint, or run the
+script yourself:
+
+    python3 scripts/lore_index.py <lore>            # regenerate
+    python3 scripts/lore_index.py <lore> --groups   # list the groups in use
+    python3 scripts/lore_index.py <lore> --check    # exit 1 if the index is stale
+
+The index stays one flat file until it passes 200 entries. Then Claude asks
+once whether to split it into a hub plus one `index/<Group>.md` per heading;
+say no and the choice is recorded in the lore's `CLAUDE.md`, so you are never
+asked again (delete that line, or say "split the index", to change your mind).
 
 ## Dashboard (for humans)
 

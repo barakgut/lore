@@ -17,11 +17,12 @@ def build_lore(pages: dict, index_text: str = None, log_text: str = "# Lore Log\
     (root / "raw").mkdir()
     for name, content in pages.items():
         (root / "wiki" / name).write_text(content)
+    (root / "CLAUDE.md").write_text("# schema\n")
     if index_text is None:
-        lines = ["# Lore Index", "", "## Pages", ""]
-        lines += [f"- [{Path(n).stem}](wiki/{n}) — hook" for n in pages]
-        index_text = "\n".join(lines) + "\n"
-    (root / "index.md").write_text(index_text)
+        from lore_index import render, write_files
+        write_files(root, render(root)[0])
+    else:
+        (root / "index.md").write_text(index_text)
     (root / "log.md").write_text(log_text)
     for name, content in (raw_files or {}).items():
         (root / "raw" / name).write_text(content)
@@ -29,7 +30,7 @@ def build_lore(pages: dict, index_text: str = None, log_text: str = "# Lore Log\
 
 
 def page_file(title, ptype="concept", body="", extra="") -> str:
-    return (f"---\ntype: {ptype}\ntitle: {title}\ndescription: about {title}\ntags: [x]\n"
+    return (f"---\ntype: {ptype}\ntitle: {title}\ndescription: about {title}\ngroup: Pages\ntags: [x]\n"
             f"sources:\n  - id: spec\n    resource: raw/spec.pdf\n"
             f"generated:\n  by: lore/test\n  at: 2026-08-01\n{extra}---\n\n{body}\n")
 
@@ -67,7 +68,7 @@ class TestShape(unittest.TestCase):
         self.assertTrue(0 <= result["score"] <= 100)
 
     def test_an_empty_lore_never_divides_by_zero(self):
-        self.assertEqual(score_for(build_lore({}, index_text="# Lore Index\n"))["score"], 100)
+        self.assertEqual(score_for(build_lore({}))["score"], 100)
 
 
 class TestIntegrity(unittest.TestCase):
@@ -93,7 +94,8 @@ class TestIntegrity(unittest.TestCase):
         self.assertEqual(len(check(score_for(lore), "integrity", "ghost_entries")["offenders"]), 1)
 
     def test_deprecated_page_indexed_outside_the_deprecated_section(self):
-        lore = build_lore({"A.md": page_file("A", extra="status: deprecated\n")})
+        lore = build_lore({"A.md": page_file("A", extra="status: deprecated\n")},
+                          index_text="# Lore Index\n\n## Pages\n- [A](wiki/A.md) — hook\n")
         self.assertEqual(check(score_for(lore), "integrity", "deprecated_placement")["score"], 0.0)
 
 
@@ -255,6 +257,31 @@ class TestOpenIssues(unittest.TestCase):
         lines = ["## Pages", "", "- [A](wiki/A.md) — hook"] + [f"prose line {n}" for n in range(297)]
         lore = build_lore({"A.md": page_file("A")}, index_text="\n".join(lines))
         self.assertAlmostEqual(check(score_for(lore), "issues", "index_size")["score"], 0.5)
+
+
+class TestIndexDriftAndGroups(unittest.TestCase):
+    def test_generated_index_has_no_drift(self):
+        lore = build_lore({"A.md": page_file("A")})
+        self.assertEqual(check(score_for(lore), "integrity", "index_drift")["score"], 1.0)
+
+    def test_hand_written_index_is_drift(self):
+        lore = build_lore({"A.md": page_file("A")}, index_text="# Lore Index\n\n## Pages\n- [A](wiki/A.md) — hook\n")
+        result = check(score_for(lore), "integrity", "index_drift")
+        self.assertEqual(result["score"], 0.0)
+        self.assertEqual(result["offenders"][0]["ref"], "index.md")
+
+    def test_unavailable_script_reports_but_does_not_penalise(self):
+        from lore_dashboard_health import _integrity
+        index = {"orphans": [], "ghost_entries": [], "entry_count": 0, "misplaced_deprecated": [], "drift": None}
+        result = next(c for c in _integrity([], index, {}) if c["key"] == "index_drift")
+        self.assertEqual((result["score"], result["offenders"]), (1.0, []))
+        self.assertIn("unavailable", result["label"])
+
+    def test_ungrouped_non_deprecated_pages_are_reported(self):
+        lore = build_lore({"A.md": page_file("A").replace("group: Pages\n", ""),
+                           "D.md": page_file("D", extra="status: deprecated\n").replace("group: Pages\n", "")})
+        result = check(score_for(lore), "issues", "ungrouped_pages")
+        self.assertEqual([o["ref"] for o in result["offenders"]], ["A"])
 
 
 if __name__ == "__main__":
