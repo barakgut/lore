@@ -25,9 +25,13 @@ def page(title, group=None, description=None, status=None, frontmatter=True):
     return "\n".join(lines) + "\n---\n\nbody\n"
 
 
-def make_lore(pages=None, index_text=None):
-    """A lore with wiki/, raw/, CLAUDE.md and the given wiki pages (name -> text)."""
-    root = Path(tempfile.mkdtemp())
+def make_lore(pages=None, index_text=None, parent=None):
+    """A lore with wiki/, raw/, CLAUDE.md and the given wiki pages (name -> text).
+
+    parent puts the lore inside a directory of the caller's own, so a test can
+    place a file beside it and check that `../` out of the index reaches it.
+    """
+    root = Path(tempfile.mkdtemp(dir=parent))
     (root / "wiki").mkdir()
     (root / "raw").mkdir()
     (root / "CLAUDE.md").write_text("# schema\n")
@@ -474,10 +478,54 @@ class TestUpgradeGuard(unittest.TestCase):
         lore = make_lore({"A.md": page("A")})
         self.assertFalse(is_curated(lore, load_entries(lore)[0]))
 
-    def test_any_page_with_a_group_disables_the_guard(self):
+    def test_a_page_that_gained_a_group_does_not_disable_the_guard(self):
         lore = self._old_lore()
-        (lore / "wiki" / "A.md").write_text(page("A", "RF"))
+        (lore / "wiki" / "A.md").write_text(page("A", "RF"))     # B is still curated by the index alone
+        proc = run(lore)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual((lore / "index.md").read_text(), CURATED)      # untouched
+
+    def test_a_new_grouped_page_beside_a_curated_index_still_refuses(self):
+        """The v0.4 -> v0.5 upgrade sequence: ingest writes its first grouped
+        page before it regenerates, and that must not flatten the old index."""
+        lore = self._old_lore()
+        (lore / "wiki" / "New.md").write_text(page("New", "Antennas"))
+        self.assertTrue(is_curated(lore, load_entries(lore)[0]))
+        proc = run(lore)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stderr, "ERROR: index.md is hand-curated and no page carries group:; run --seed-groups once\n")
+        self.assertEqual((lore / "index.md").read_text(), CURATED)      # untouched
+
+    def test_a_fully_grouped_index_passes_even_with_the_marker_stripped(self):
+        """What --seed-groups leaves behind: every heading is reproducible from
+        the pages, so regenerating loses nothing and the guard self-heals."""
+        lore = self._old_lore()
+        run(lore, "--seed-groups")
+        index = (lore / "index.md").read_text()
+        (lore / "index.md").write_text(index.replace(MARKER + "\n", ""))
+        self.assertFalse(is_curated(lore, load_entries(lore)[0]))
         self.assertEqual(run(lore).returncode, 0)
+        self.assertEqual((lore / "index.md").read_text(), index)
+
+    def test_hub_lines_are_followed_one_level_only(self):
+        """A group file that links itself is read once — not to a RecursionError
+        traceback that reads like the curated refusal."""
+        lore = make_lore({"A.md": page("A")})
+        (lore / "index").mkdir()
+        (lore / "index" / "Loop.md").write_text("# Loop\n- [Loop](index/Loop.md)\n- [A](wiki/A.md)\n")
+        (lore / "index.md").write_text("# Lore Index\n\n- [Loop](index/Loop.md) — 1 page: A\n")
+        pairs, generated = read_current_index(lore)
+        self.assertEqual((pairs, generated), ([("Loop", "index/Loop.md"), ("Loop", "wiki/A.md")], False))
+        self.assertNotIn("RecursionError", run(lore).stderr)
+
+    def test_a_hub_target_that_escapes_the_lore_is_not_followed(self):
+        enclosing = Path(tempfile.mkdtemp())
+        (enclosing / "outside").mkdir()
+        (enclosing / "outside" / "notes.md").write_text("# Notes\n- [Ghost](wiki/Ghost.md)\n")
+        lore = make_lore({"A.md": page("A")}, parent=enclosing,
+                         index_text="# Lore Index\n\n## RF\n- [Out](index/../../outside/notes.md)\n")
+        pairs, _ = read_current_index(lore)
+        self.assertEqual(pairs, [("RF", "index/../../outside/notes.md")])
 
     def test_check_ignores_the_guard(self):
         self.assertEqual(run(self._old_lore(), "--check").returncode, 1)     # drift, not the ERROR
@@ -537,6 +585,22 @@ class TestSeedGroups(unittest.TestCase):
                          index_text="# Lore Index\n\n## RF\n- [A](wiki/A.md)\n")
         self.assertEqual(seed_groups(lore), [])
         self.assertEqual((lore / "wiki" / "A.md").read_text(), page("A", frontmatter=False))
+
+    def test_seed_never_writes_outside_wiki(self):
+        enclosing = Path(tempfile.mkdtemp())
+        (enclosing / "outside").mkdir()
+        secret = enclosing / "outside" / "secret.md"
+        secret.write_text("---\ntype: concept\ntitle: Secret\n---\nbody\n")
+        lore = make_lore({"A.md": page("A")}, parent=enclosing,
+                         index_text="# Lore Index\n\n## Hardware\n- [A](wiki/A.md)\n"
+                                    "- [Secret](../outside/secret.md)\n"
+                                    "- [Nested](wiki/sub/deep.md)\n")
+        (lore / "wiki" / "sub").mkdir()          # the layout is flat: a nested page is not a page
+        (lore / "wiki" / "sub" / "deep.md").write_text(page("Deep"))
+        proc = run(lore, "--seed-groups")
+        self.assertEqual((proc.returncode, proc.stdout), (0, "seeded: wiki/A.md (group: Hardware)\n"))
+        self.assertEqual(secret.read_text(), "---\ntype: concept\ntitle: Secret\n---\nbody\n")
+        self.assertNotIn("group:", (lore / "wiki" / "sub" / "deep.md").read_text())
 
     def test_seed_skips_an_index_entry_whose_file_does_not_exist(self):
         lore = make_lore({}, index_text="# Lore Index\n\n## RF\n- [Ghost](wiki/Ghost.md)\n")

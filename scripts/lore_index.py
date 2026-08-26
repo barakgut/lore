@@ -287,6 +287,16 @@ def check(lore):
     return sorted(drift)
 
 
+def in_folder(target, folder):
+    """True only for `<folder>/<name>.md` — one path component directly under
+    folder, no traversal. An index link is hand-written text that may point
+    anywhere, so every path the script reads or writes from one is filtered
+    through this: pages live in `wiki/`, group files in `index/`, and
+    `index/../../x.md` is neither."""
+    head, sep, name = target.partition("/")
+    return bool(sep) and head == folder and name.endswith(".md") and "/" not in name
+
+
 def _read(path):
     try:
         return Path(path).read_text(encoding="utf-8", errors="replace")
@@ -297,12 +307,19 @@ def _read(path):
 def read_current_index(lore):
     """(heading, target) for every entry line of the index on disk, following
     hub lines into index/<Group>.md (the hub link text is that heading), and
-    whether index.md carries the generated marker."""
+    whether index.md carries the generated marker.
+
+    Hub lines are followed one level only — out of index.md into a group
+    file, never out of a group file — so a hand-written index whose group
+    file links back to itself is read once instead of recursing forever; a
+    hub line inside a group file is kept as an ordinary entry. Only a real
+    `index/<name>.md` is followed (in_folder), so a link that escapes the
+    lore is never opened."""
     lore = Path(lore)
     text = _read(lore / "index.md")
     pairs = []
 
-    def walk(body, heading):
+    def walk(body, heading, follow):
         for line in body.split("\n"):
             found = INDEX_HEADING_RE.match(line)
             if found:
@@ -312,25 +329,36 @@ def read_current_index(lore):
             if not entry:
                 continue
             target = entry.group("target").strip()
-            if target.startswith("index/") and target.endswith(".md"):
-                walk(_read(lore / target), entry.group("title").strip())
+            if follow and in_folder(target, "index"):
+                walk(_read(lore / target), entry.group("title").strip(), False)
             else:
                 pairs.append((heading, target))
 
-    walk(text, None)
+    walk(text, None, True)
     return pairs, MARKER in text
 
 
 def is_curated(lore, entries):
-    """True when index.md is a hand-written pre-0.5 index that --seed-groups
-    must read before it is overwritten: no marker, no page carries group, and
-    at least one entry sits under a real topic heading."""
-    if any(entry["group"] for entry in entries):
-        return False
+    """True when regenerating would lose hand-made curation, i.e. index.md
+    carries no generated marker and lists at least one page under a real
+    topic heading that the page's own `group:` would not reproduce —
+    exactly what --seed-groups has to read before it is overwritten.
+
+    The question is per entry, not per lore: a v0.4 index keeps its curation
+    while any one of its headings is still carried only by the index, so
+    pages arriving already grouped (v0.5 ingest writes `group:` on every new
+    page) cannot switch the guard off underneath the pages that predate them.
+    Everything a plain regeneration reproduces is not curation: the marker
+    (a generated index, however it was later touched), `## Ungrouped` and
+    `## Deprecated` headings, a missing index, and any entry whose page
+    already carries a group — which is why a lore that --seed-groups has
+    migrated passes even if a human strips the marker line."""
     pairs, generated = read_current_index(lore)
     if generated:
         return False
-    return any(heading not in (None, UNGROUPED, DEPRECATED) for heading, _ in pairs)
+    grouped = {entry["file"] for entry in entries if entry["group"]}
+    return any(heading not in (None, UNGROUPED, DEPRECATED) and target not in grouped
+               for heading, target in pairs)
 
 
 def _after_value(lines, start):
@@ -363,6 +391,11 @@ def seed_groups(lore):
     every indexed page that has frontmatter and no group. Deprecated-section
     entries are skipped. Returns the (target, heading) pairs stamped.
 
+    This is the only code here that writes to a page, from targets taken out
+    of a hand-written index, so a target that is not a `wiki/<name>.md` of
+    this lore is skipped outright (in_folder): a link such as
+    `../elsewhere/notes.md` is somebody else's file, never stamped.
+
     The insertion point is placed after the anchor's full value, including
     any block-scalar continuation lines, so a multi-line description: | or
     title: > is never split apart."""
@@ -370,8 +403,10 @@ def seed_groups(lore):
     stamped, seen = [], set()
     pairs, _ = read_current_index(lore)
     for heading, target in pairs:
+        if heading in (None, UNGROUPED, DEPRECATED) or target in seen or not in_folder(target, "wiki"):
+            continue
         path = lore / target
-        if heading in (None, UNGROUPED, DEPRECATED) or target in seen or not path.is_file():
+        if not path.is_file():
             continue
         seen.add(target)
         text = path.read_text(encoding="utf-8", errors="replace")
